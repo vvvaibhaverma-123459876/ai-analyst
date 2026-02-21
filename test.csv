@@ -1,0 +1,31 @@
+date,channel,region,device,signups,conversions,revenue
+2024-01-01,Organic,Mumbai,Android,120,24,4800
+2024-01-01,Paid Search,Delhi,iOS,80,16,3200
+2024-01-01,Referral,Bangalore,Android,60,12,2400
+2024-01-02,Organic,Mumbai,Android,130,26,5200
+2024-01-02,Paid Search,Delhi,iOS,75,15,3000
+2024-01-02,Referral,Bangalore,Android,65,13,2600
+2024-01-03,Organic,Mumbai,Android,125,25,5000
+2024-01-03,Paid Search,Delhi,iOS,70,14,2800
+2024-01-03,Referral,Bangalore,Android,62,12,2480
+2024-01-04,Organic,Mumbai,Android,140,28,5600
+2024-01-04,Paid Search,Delhi,iOS,85,17,3400
+2024-01-04,Referral,Bangalore,Android,68,14,2720
+2024-01-05,Organic,Mumbai,Android,150,30,6000
+2024-01-05,Paid Search,Delhi,iOS,95,19,3800
+2024-01-05,Referral,Bangalore,Android,72,15,3000
+2024-01-06,Organic,Mumbai,Android,145,29,5800
+2024-01-06,Paid Search,Delhi,iOS,90,18,3600
+2024-01-06,Referral,Bangalore,Android,70,14,2800
+2024-01-07,Organic,Mumbai,Android,160,32,6400
+2024-01-07,Paid Search,Delhi,iOS,100,20,4000
+2024-01-07,Referral,Bangalore,Android,75,16,3200
+2024-01-08,Organic,Mumbai,Android,100,20,4000
+2024-01-08,Paid Search,Delhi,iOS,60,12,2400
+2024-01-08,Referral,Bangalore,Android,50,10,2000
+2024-01-09,Organic,Mumbai,Android,95,19,3800
+2024-01-09,Paid Search,Delhi,iOS,55,11,2200
+2024-01-09,Referral,Bangalore,Android,48,9,1800
+2024-01-10,Organic,Mumbai,Android,170,34,6800
+2024-01-10,Paid Search,Delhi,iOS,110,22,4400
+2024-01-10,Referral,Bangalore,Android,80,18,3600
