@@ -109,19 +109,49 @@ if grain == "Weekly":
 elif grain == "Monthly":
     ts = ts.set_index("__date__").resample("M")[kpi_col].sum().reset_index()
 
-# Plot
+# ---- Anomaly Detection ----
+st.subheader("Anomaly Detection")
+
+window = st.slider("Rolling window (points)", min_value=3, max_value=30, value=min(7, max(3, len(ts)//2)))
+z_thresh = st.slider("Z-score threshold", min_value=1.0, max_value=5.0, value=2.0, step=0.1)
+
+ts2 = ts.copy()
+ts2["rolling_mean"] = ts2[kpi_col].rolling(window=window, min_periods=3).mean()
+ts2["rolling_std"] = ts2[kpi_col].rolling(window=window, min_periods=3).std()
+
+# Avoid divide-by-zero
+ts2["zscore"] = (ts2[kpi_col] - ts2["rolling_mean"]) / ts2["rolling_std"].replace(0, np.nan)
+ts2["is_anomaly"] = ts2["zscore"].abs() >= z_thresh
+
+# Plot with anomalies
 fig, ax = plt.subplots()
-ax.plot(ts["__date__"], ts[kpi_col])
-ax.set_title(f"{kpi_col} trend ({grain.lower()})")
+ax.plot(ts2["__date__"], ts2[kpi_col], label="KPI")
+
+anoms = ts2[ts2["is_anomaly"] & ts2["zscore"].notna()]
+if not anoms.empty:
+    ax.scatter(anoms["__date__"], anoms[kpi_col], color="red", label="Anomaly")
+
+ax.set_title(f"{kpi_col} trend ({grain.lower()}) with anomalies")
 ax.set_xlabel("Date")
 ax.set_ylabel(kpi_col)
+ax.legend()
 plt.xticks(rotation=45)
 st.pyplot(fig)
 
-# Quick delta
-if len(ts) >= 2:
-    latest = ts[kpi_col].iloc[-1]
-    prev = ts[kpi_col].iloc[-2]
+# Anomaly table
+if not anoms.empty:
+    st.write("Detected anomalies:")
+    out = anoms[["__date__", kpi_col, "zscore"]].copy()
+    out["zscore"] = out["zscore"].round(2)
+    st.dataframe(out, use_container_width=True)
+else:
+    st.info("No anomalies detected with current settings.")
+
+# ---- Quick delta ----
+st.subheader("Latest change")
+if len(ts2) >= 2:
+    latest = ts2[kpi_col].iloc[-1]
+    prev = ts2[kpi_col].iloc[-2]
     delta = latest - prev
     pct = (delta / prev * 100) if prev != 0 else np.nan
     st.metric(label="Latest vs Previous", value=f"{latest:,.2f}", delta=f"{delta:,.2f} ({pct:,.2f}%)")
