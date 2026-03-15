@@ -1,0 +1,51 @@
+name: Nightly full suite
+
+on:
+  schedule:
+    - cron: "0 2 * * *"    # 02:00 UTC every night
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    name: Full suite (all markers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install CI dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Copy CI env
+        run: cp .env.ci .env
+
+      - name: Run full suite with coverage
+        run: |
+          pytest tests/ \
+            -n auto \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=html:htmlcov \
+            --cov-omit="app/*,tests/*,*/__pycache__/*" \
+            --timeout=120 \
+            -q
+
+      - name: Upload coverage HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ github.sha }}
+          path: htmlcov/
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+          flags: nightly
+          fail_ci_if_error: false

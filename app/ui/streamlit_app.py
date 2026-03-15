@@ -1,3 +1,7 @@
+# DEPRECATED — This UI version is superseded by v06_app.py (v0.6+).
+# It is retained for reference only and will be removed in v10.
+# Do not add new functionality here.
+
 """
 app/ui/streamlit_app.py
 Main Streamlit application. Wires all modules together.
@@ -107,7 +111,8 @@ with st.sidebar:
     history_records = mods["history"].recent(5)
     if history_records:
         for rec in history_records:
-            st.caption(f"🕐 {rec['timestamp'][:16]}  \n{rec['question'][:50]}")
+            st.caption(f"🕐 {rec['timestamp'][:16]}  
+{rec['question'][:50]}")
     else:
         st.caption("No history yet.")
 

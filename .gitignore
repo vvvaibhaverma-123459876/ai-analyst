@@ -1,6 +1,54 @@
-venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
 .env
-.streamlit/
+!.env.ci
+!.env.example
+
+# Pytest + coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.lcov
+
+# Secrets and local config
+*.db
+memory/org_memory.db
+memory/learning.db
+memory/audit.db
+memory/guardian.db
+memory/enrichment.db
+memory/sessions.db
+memory/lessons.jsonl
+memory/approvals.jsonl
+memory/manifests/
+memory/replay_data/
+memory/vectors/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 .DS_Store
+
+# Logs
+*.log
+logs/
+
+# Distribution
+*.zip
+*.tar.gz

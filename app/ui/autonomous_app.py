@@ -1,3 +1,7 @@
+# DEPRECATED — This UI version is superseded by v06_app.py (v0.6+).
+# It is retained for reference only and will be removed in v10.
+# Do not add new functionality here.
+
 """
 app/ui/autonomous_app.py — v0.4
 Fully autonomous AI analyst Streamlit UI.

@@ -1,3 +1,7 @@
+# DEPRECATED — This UI version is superseded by v06_app.py (v0.6+).
+# It is retained for reference only and will be removed in v10.
+# Do not add new functionality here.
+
 """
 app/ui/v05_app.py — v0.5
 Fully autonomous AI analyst — enterprise edition.
@@ -569,8 +573,10 @@ elif st.session_state.stage == "results":
 
             if f_agent and f_agent.data.get("data_gaps"):
                 st.warning(
-                    "**Data gaps** — these columns/signals would unlock more hypotheses:\n"
-                    + "\n".join(f"- {g}" for g in f_agent.data["data_gaps"][:5])
+                    "**Data gaps** — these columns/signals would unlock more hypotheses:
+"
+                    + "
+".join(f"- {g}" for g in f_agent.data["data_gaps"][:5])
                 )
 
             st.markdown("**Hypothesis verdicts**")

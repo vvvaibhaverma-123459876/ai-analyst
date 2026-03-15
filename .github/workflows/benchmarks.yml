@@ -1,0 +1,162 @@
+name: Benchmark Suite — v9
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: Release gate (runs first — fail fast) ──────────────────
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - name: Run release gate checks
+        run: |
+          python -c "
+          from versioning.release_gate import check_release_readiness
+          ok, issues = check_release_readiness()
+          for i in issues: print('FAIL:', i)
+          exit(0 if ok else 1)
+          "
+      - name: Run release gate benchmark
+        run: pytest tests/test_bench_release_gate.py -v --tb=short --timeout=30
+
+  # ── Job 2: Gold scenarios (all 14 must pass for release) ──────────
+  gold-scenarios:
+    name: Gold scenarios
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - run: pytest tests/test_bench_gold_scenarios.py -v --tb=short --timeout=90
+
+  # ── Job 3: Security boundaries (all must pass) ────────────────────
+  security-boundaries:
+    name: Security boundaries
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - run: |
+          pytest tests/test_bench_security.py \
+                 tests/test_bench_security_boundaries.py \
+            -v --tb=short --timeout=60
+
+  # ── Job 4: Source conflict benchmarks ────────────────────────────
+  source-conflict:
+    name: Source conflict
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - run: pytest tests/test_bench_source_conflict.py -v --tb=short --timeout=30
+
+  # ── Job 5: Unit tests (matrix) ────────────────────────────────────
+  unit:
+    name: Unit tests (py${{ matrix.python-version }})
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - run: |
+          pytest tests/test_bench_analysis.py \
+                 tests/test_bench_jury.py \
+                 tests/test_bench_science.py \
+                 tests/test_bench_guardian_learning.py \
+                 tests/test_semantic_and_science.py \
+                 tests/test_semantic_wiring.py \
+                 tests/test_v07_governance.py \
+            -n auto --cov=. --cov-report=xml \
+            --cov-omit="app/*,tests/*" -q
+      - uses: codecov/codecov-action@v4
+        if: matrix.python-version == '3.11'
+        with: { file: coverage.xml, flags: unit, fail_ci_if_error: false }
+
+  # ── Job 6: Infrastructure + E2E ───────────────────────────────────
+  e2e:
+    name: Infrastructure + E2E
+    needs: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements-ci.txt
+      - run: cp .env.ci .env
+      - run: |
+          pytest tests/test_bench_infrastructure.py \
+                 tests/test_bench_pipeline_e2e.py \
+                 tests/test_v071_runtime_wiring.py \
+            -v --tb=short --timeout=90
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results-${{ github.sha }}
+          path: memory/manifests/
+          retention-days: 7
+
+  # ── Final gate: blocks merge ───────────────────────────────────────
+  all-green:
+    name: All benchmarks passed
+    needs:
+      - release-gate
+      - gold-scenarios
+      - security-boundaries
+      - source-conflict
+      - unit
+      - e2e
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          results="${{ needs.release-gate.result }} \
+                   ${{ needs.gold-scenarios.result }} \
+                   ${{ needs.security-boundaries.result }} \
+                   ${{ needs.source-conflict.result }} \
+                   ${{ needs.unit.result }}"
+          for r in $results; do
+            if [[ "$r" != "success" ]]; then
+              echo "A required benchmark job failed."
+              exit 1
+            fi
+          done
+          echo "All critical benchmark jobs passed."
