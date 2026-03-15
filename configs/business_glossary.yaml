@@ -1,0 +1,37 @@
+# configs/business_glossary.yaml
+# Maps business language → technical filters / column values.
+# The semantic mapper uses this to translate user questions.
+
+time_expressions:
+  yesterday: "DATE_SUB(CURRENT_DATE, 1)"
+  last_week: "BETWEEN DATE_SUB(CURRENT_DATE, 7) AND CURRENT_DATE"
+  last_30_days: "BETWEEN DATE_SUB(CURRENT_DATE, 30) AND CURRENT_DATE"
+  this_month: "DATE_TRUNC('month', CURRENT_DATE)"
+  wow: "week_over_week"
+  dod: "day_over_day"
+  mom: "month_over_month"
+
+segments:
+  android:
+    column: platform
+    value: "android"
+  ios:
+    column: platform
+    value: "ios"
+  web:
+    column: platform
+    value: "web"
+  organic:
+    column: source
+    value: "organic"
+
+funnel_stages:
+  - signup
+  - kyc_start
+  - kyc_complete
+  - fd_initiated
+  - fd_payment_success
+  - vkyc_start
+  - vkyc_complete
+  - card_issued
+  - activation

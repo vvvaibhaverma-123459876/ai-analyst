@@ -1,0 +1,42 @@
+# configs/metrics.yaml
+# Define your business metrics here.
+# The LLM uses these to map natural language to correct formulas.
+
+metrics:
+  signups:
+    label: "Signups"
+    description: "Total number of new user registrations"
+    column: "signups"
+    aggregation: "sum"
+    aliases: ["new users", "registrations", "new signups"]
+
+  revenue:
+    label: "Revenue"
+    description: "Total transaction revenue in INR"
+    column: "revenue"
+    aggregation: "sum"
+    aliases: ["total revenue", "earnings", "gmv"]
+
+  conversion_rate:
+    label: "Conversion Rate"
+    description: "Signups who completed a target action / total signups"
+    numerator: "converted_users"
+    denominator: "signups"
+    aggregation: "ratio"
+    aliases: ["cvr", "conversion", "success rate"]
+
+  fd_payment_conversion:
+    label: "FD Payment Conversion"
+    description: "Users who completed FD payment / users who initiated FD"
+    numerator: "fd_payment_success"
+    denominator: "fd_payment_initiated"
+    aggregation: "ratio"
+    aliases: ["fd conversion", "fixed deposit conversion", "fd success rate"]
+
+  kyc_completion:
+    label: "KYC Completion Rate"
+    description: "Users who completed KYC / users who started KYC"
+    numerator: "kyc_completed"
+    denominator: "kyc_started"
+    aggregation: "ratio"
+    aliases: ["kyc rate", "kyc success"]

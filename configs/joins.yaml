@@ -1,0 +1,11 @@
+# configs/joins.yaml
+# Define how tables relate to each other.
+# Used by the SQL generator to build correct JOINs.
+
+joins:
+  - left_table: events
+    right_table: daily_metrics
+    join_type: LEFT
+    on:
+      - left: event_date
+        right: metric_date

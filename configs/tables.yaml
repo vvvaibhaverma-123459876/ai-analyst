@@ -1,0 +1,52 @@
+# configs/tables.yaml
+# Describe tables available in Athena (or any SQL source).
+# Used by the schema loader and SQL generator.
+
+tables:
+  events:
+    description: "Raw user events table"
+    date_column: "event_date"
+    grain: "event"
+    columns:
+      - name: event_date
+        type: date
+        description: "Date of the event"
+      - name: user_id
+        type: string
+        description: "Unique user identifier"
+      - name: event_type
+        type: string
+        description: "Type of event (signup, kyc_start, fd_payment, etc.)"
+      - name: platform
+        type: string
+        description: "Platform: android / ios / web"
+      - name: source
+        type: string
+        description: "Acquisition source / UTM source"
+      - name: bank
+        type: string
+        description: "Partner bank name"
+
+  daily_metrics:
+    description: "Pre-aggregated daily KPI table"
+    date_column: "metric_date"
+    grain: "daily"
+    columns:
+      - name: metric_date
+        type: date
+        description: "Reporting date"
+      - name: signups
+        type: integer
+        description: "Daily new signups"
+      - name: revenue
+        type: float
+        description: "Daily revenue in INR"
+      - name: converted_users
+        type: integer
+        description: "Users who converted"
+      - name: channel
+        type: string
+        description: "Acquisition channel"
+      - name: platform
+        type: string
+        description: "Platform: android / ios / web"
