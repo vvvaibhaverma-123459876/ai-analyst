@@ -18,6 +18,10 @@ from __future__ import annotations
 import json
 from agents.context import AnalysisContext
 from science.research_plan import ResearchPlan, Hypothesis, HypothesisStatus
+from science.evidence_registry import EvidenceRegistry, EvidenceRecord, EvidenceState
+from science.uncertainty_model import UncertaintyModel
+from guardian.confidence_scorer import ConfidenceScorer
+from guardian.evidence_grader import EvidenceGrader
 from core.config import config
 from core.logger import get_logger
 
@@ -34,6 +38,13 @@ Return ONLY valid JSON list:
 
 
 class ConclusionEngine:
+
+    def __init__(self):
+        self._evidence_registry = EvidenceRegistry()
+        self._uncertainty_model = UncertaintyModel()
+        self._confidence_scorer = ConfidenceScorer()
+        self._evidence_grader = EvidenceGrader()
+
 
     def close_hypotheses(self, context: AnalysisContext) -> ResearchPlan:
         """
@@ -78,6 +89,8 @@ class ConclusionEngine:
                     f"No hypothesis confirmed. Most likely: {inconclusive[0].statement[:60]}. "
                     f"Additional data required: {', '.join(plan.data_gaps[:2])}"
                 )
+                # v0.6: auto-design experiment for top inconclusive hypothesis
+                self._propose_experiment(inconclusive[0], context, plan)
             else:
                 plan.primary_conclusion = "All tested hypotheses rejected. Data may not support current framing."
 
@@ -86,8 +99,26 @@ class ConclusionEngine:
         return plan
 
     # ------------------------------------------------------------------
-    # Evidence collection
+    # v0.6: Experiment auto-design for inconclusive hypotheses
     # ------------------------------------------------------------------
+
+    def _propose_experiment(self, hypothesis, context, plan):
+        """Auto-design an experiment when a hypothesis is inconclusive."""
+        try:
+            from science.experiment_designer import ExperimentDesigner
+            designer = ExperimentDesigner()
+            spec = designer.design(
+                hypothesis=hypothesis.statement,
+                metric=context.kpi_col or "metric",
+                df=context.df,
+                kpi_col=context.kpi_col or "",
+                expected_lift_pct=5.0,
+            )
+            plan.experiment_spec = spec
+            logger.info("ExperimentDesigner: proposed spec id=%s", spec.spec_id)
+        except Exception as e:
+            logger.warning("ExperimentDesigner failed (non-fatal): %s", e)
+
 
     def _collect_evidence(self, plan: ResearchPlan, context: AnalysisContext):
         """Map agent results to hypotheses as evidence."""
@@ -97,13 +128,21 @@ class ConclusionEngine:
                 if not result or result.status != "success":
                     continue
 
-                # Determine if this agent's finding supports or opposes the hypothesis
                 supports = self._does_support(h, result, context)
+                record = EvidenceRecord(
+                    hypothesis_id=h.id,
+                    agent=agent_name,
+                    summary=result.summary[:160],
+                    supports=supports,
+                    confidence=self._extract_confidence(result),
+                    metadata={"agent": agent_name},
+                )
                 plan.add_evidence(h.id, {
-                    "agent": agent_name,
-                    "summary": result.summary[:120],
-                    "supports": supports,
-                    "confidence": self._extract_confidence(result),
+                    "agent": record.agent,
+                    "summary": record.summary,
+                    "supports": record.supports,
+                    "confidence": record.confidence,
+                    "metadata": record.metadata,
                 })
 
     def _does_support(self, h: Hypothesis, result, context: AnalysisContext) -> bool:
@@ -146,33 +185,45 @@ class ConclusionEngine:
     # ------------------------------------------------------------------
 
     def _score_hypothesis(self, h: Hypothesis, context: AnalysisContext):
-        if not h.evidence:
-            h.confidence = 0.0
-            return
+        records = [
+            EvidenceRecord(
+                hypothesis_id=h.id,
+                agent=e.get("agent", "unknown"),
+                summary=e.get("summary", ""),
+                supports=e.get("supports"),
+                confidence=float(e.get("confidence", 0.5)),
+                metadata=e.get("metadata", {}),
+            )
+            for e in h.evidence
+        ]
 
-        n_support = h.supporting_evidence_count
-        n_oppose = h.opposing_evidence_count
-        n_total = n_support + n_oppose
-
-        if n_total == 0:
-            h.confidence = 0.0
-            return
-
-        # Base confidence from evidence ratio
-        base = n_support / n_total
-
-        # Weight by individual evidence confidence scores
-        weighted_support = sum(
-            e.get("confidence", 0.5) for e in h.evidence if e.get("supports")
+        summary = self._evidence_registry.summarise(records, h.missing_data)
+        uncertainty = self._uncertainty_model.assess(
+            evidence_confidence=summary.confidence,
+            n_evidence=len(records),
+            data_gaps=len(h.missing_data),
+            contradictions=1 if summary.state == EvidenceState.CONTRADICTED else 0,
         )
-        weighted_oppose = sum(
-            e.get("confidence", 0.5) for e in h.evidence if not e.get("supports")
+        confidence = self._confidence_scorer.score(
+            evidence_confidence=summary.confidence,
+            contradictions=1 if summary.state == EvidenceState.CONTRADICTED else 0,
+            data_gaps=len(h.missing_data),
         )
-        total_weight = weighted_support + weighted_oppose
-        if total_weight > 0:
-            h.confidence = round(weighted_support / total_weight, 3)
+        dq_score = (getattr(context, 'data_quality_report', {}) or {}).get('score')
+        evidence_grade = self._evidence_grader.grade(
+            support_ratio=getattr(summary, 'support_ratio', summary.confidence),
+            confidence=confidence.score,
+            contradictions=1 if summary.state == EvidenceState.CONTRADICTED else 0,
+            data_quality_score=dq_score,
+        )
+
+        if dq_score is not None and dq_score < 0.5:
+            h.confidence = round(min(confidence.score, evidence_grade.summary_strength) * max(0.45, dq_score + 0.2), 3)
         else:
-            h.confidence = round(base, 3)
+            h.confidence = confidence.score
+        h.evidence_state = summary.state.value
+        h.evidence_grade = evidence_grade.grade
+        h.uncertainty_level = uncertainty.level
 
     # ------------------------------------------------------------------
     # Verdicts
@@ -180,15 +231,27 @@ class ConclusionEngine:
 
     def _rule_verdicts(self, hypotheses: list[Hypothesis]):
         for h in hypotheses:
-            if h.confidence >= 0.70:
+            if h.evidence_state == EvidenceState.UNTESTABLE.value:
+                h.status = HypothesisStatus.NOT_TESTABLE
+                h.verdict = "Not testable with currently available data."
+            elif h.evidence_state == EvidenceState.SUPPORTED.value and h.confidence >= 0.65:
                 h.status = HypothesisStatus.CONFIRMED
-                h.verdict = f"Confirmed with {h.confidence:.0%} confidence based on {len(h.evidence)} evidence sources."
-            elif h.confidence <= 0.30:
+                h.verdict = (
+                    f"Confirmed with {h.confidence:.0%} confidence based on {len(h.evidence)} evidence sources; "
+                    f"grade={h.evidence_grade}, uncertainty={h.uncertainty_level}."
+                )
+            elif h.evidence_state == EvidenceState.CONTRADICTED.value and h.confidence <= 0.35:
                 h.status = HypothesisStatus.REJECTED
-                h.verdict = f"Rejected — opposing evidence outweighs supporting (confidence={h.confidence:.0%})."
+                h.verdict = (
+                    f"Rejected — opposing evidence outweighs support (confidence={h.confidence:.0%}); "
+                    f"grade={h.evidence_grade}, uncertainty={h.uncertainty_level}."
+                )
             else:
                 h.status = HypothesisStatus.INCONCLUSIVE
-                h.verdict = f"Inconclusive — mixed evidence (confidence={h.confidence:.0%}). More data needed."
+                h.verdict = (
+                    f"Inconclusive — evidence state={h.evidence_state} (confidence={h.confidence:.0%}); "
+                    f"grade={h.evidence_grade}, uncertainty={h.uncertainty_level}."
+                )
 
     def _llm_verdicts(self, hypotheses: list[Hypothesis], context: AnalysisContext):
         try:

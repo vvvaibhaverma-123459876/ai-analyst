@@ -1,13 +1,6 @@
 """
-agents/insight_agent.py — v0.4
-Synthesises ALL agent findings including:
-- Debate challenges
-- Business context from ContextEngine
-- Forecast direction
-- Experiment results
-- NLP / vision insights
-- Cluster segments
-Saves key findings to OrgMemory for future sessions.
+agents/insight_agent.py — v0.7
+Synthesises all findings, builds recommendation candidates, ranks them, and saves key findings.
 """
 
 from __future__ import annotations
@@ -16,6 +9,7 @@ from agents.base_agent import BaseAgent
 from agents.context import AnalysisContext, AgentResult
 from core.config import config
 from core.logger import get_logger
+from insights.recommendation_ranker import RecommendationRanker
 
 logger = get_logger("agent.insight")
 
@@ -41,31 +35,84 @@ class InsightAgent(BaseAgent):
 
     def _run(self, context: AnalysisContext) -> AgentResult:
         summaries = context.get_summaries()
-        narrative = {k: v for k, v in summaries.items()
-                     if k not in ("orchestrator", "eda", "insight")}
+        narrative = {k: v for k, v in summaries.items() if k not in ("orchestrator", "eda", "insight")}
 
         if not narrative:
             return self.skip("No findings to synthesise.")
 
+        if not context.recommendation_candidates:
+            context.recommendation_candidates = self._collect_recommendation_candidates(context)
+
         brief = self._generate_brief(context, narrative)
         followups = self._generate_followups(context, narrative)
+        ranked_recommendations = self._rank_recommendations(context)
 
         context.final_brief = brief
         context.follow_up_questions = followups
 
-        # Save insight to org memory
         self._save_to_memory(context, brief)
 
         return AgentResult(
             agent=self.name, status="success",
-            summary=f"Brief generated from {len(narrative)} agent(s). "
-                    f"{len(followups)} follow-up questions.",
+            summary=f"Brief generated from {len(narrative)} agent(s). {len(followups)} follow-up questions and {len(ranked_recommendations)} ranked actions.",
             data={
                 "brief": brief,
                 "follow_up_questions": followups,
+                "recommendation_candidates": context.recommendation_candidates,
+                "ranked_recommendations": [r.to_dict() for r in ranked_recommendations],
                 "agents_synthesised": list(narrative.keys()),
             },
         )
+
+    def _collect_recommendation_candidates(self, context: AnalysisContext) -> list[dict]:
+        candidates: list[dict] = []
+        kpi = context.kpi_col or 'the KPI'
+
+        dq = (context.data_quality_report or {}).get('score', 1.0)
+        if dq < 0.6:
+            candidates.append({
+                'action': 'Resolve data-quality blockers before escalating business conclusions',
+                'confidence': 0.98, 'urgency': 1.0, 'business_value': 1.0, 'effort': 0.2,
+            })
+
+        rc = context.results.get('root_cause')
+        if rc and rc.status == 'success':
+            movers = (rc.data or {}).get('movers', {})
+            top_neg = (movers.get('negative') or [])[:2]
+            for item in top_neg:
+                candidates.append({
+                    'action': f"Investigate {item.get('dimension')}={item.get('value')} as a likely drag on {kpi}",
+                    'confidence': 0.82, 'urgency': 0.8, 'business_value': 0.85, 'effort': 0.35,
+                })
+
+        anom = context.results.get('anomaly')
+        if anom and anom.status == 'success' and (anom.data or {}).get('anomaly_count', 0) > 0:
+            candidates.append({
+                'action': f"Validate raw data and operational logs for recent {kpi} anomalies before escalation",
+                'confidence': 0.88, 'urgency': 0.85, 'business_value': 0.8, 'effort': 0.3,
+            })
+
+        debate = context.results.get('debate')
+        if debate and debate.status == 'success' and (debate.data or {}).get('red_flags'):
+            candidates.append({
+                'action': 'Address debate red flags and confounders before treating the narrative as final',
+                'confidence': 0.9, 'urgency': 0.75, 'business_value': 0.9, 'effort': 0.25,
+            })
+
+        plan = getattr(context, 'research_plan', None)
+        if plan and getattr(plan, 'data_gaps', None):
+            candidates.append({
+                'action': f"Collect missing evidence: {', '.join(plan.data_gaps[:2])}",
+                'confidence': 0.76, 'urgency': 0.65, 'business_value': 0.7, 'effort': 0.45,
+            })
+
+        if not candidates:
+            candidates = [
+                {'action': f'Check the top segment driving change in {kpi}', 'confidence': 0.7, 'urgency': 0.8, 'business_value': 0.8, 'effort': 0.3},
+                {'action': 'Validate data freshness and event completeness before escalation', 'confidence': 0.9, 'urgency': 0.9, 'business_value': 0.9, 'effort': 0.2},
+                {'action': 'Review same-weekday baseline to avoid false day-over-day inference', 'confidence': 0.75, 'urgency': 0.6, 'business_value': 0.7, 'effort': 0.2},
+            ]
+        return candidates
 
     def _generate_brief(self, context: AnalysisContext, summaries: dict) -> str:
         if config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY:
@@ -81,98 +128,64 @@ class InsightAgent(BaseAgent):
 
         biz = context.business_context
         audience = biz.get("audience", "business stakeholders")
-        urgency  = biz.get("urgency", "medium")
+        urgency = biz.get("urgency", "medium")
 
-        # Collect structured numbers
-        rc   = context.results.get("root_cause")
-        anom = context.results.get("anomaly")
-        fcst = context.results.get("forecast")
-        exp  = context.results.get("experiment")
-        dbte = context.results.get("debate")
-        clst = context.results.get("ml_cluster")
-
-        facts: dict = {
+        facts = {
             "kpi": context.kpi_col,
             "audience": audience,
             "urgency": urgency,
             "business_context": biz,
             "agent_summaries": summaries,
+            "recommendation_candidates": context.recommendation_candidates,
         }
-        if rc and rc.status == "success":
-            facts["delta"] = rc.data.get("delta")
-            facts["pct_change"] = rc.data.get("pct_change")
-            facts["top_drivers"] = rc.data.get("movers", {})
-        if anom and anom.status == "success":
-            facts["anomaly_count"] = anom.data.get("anomaly_count")
-            facts["anomaly_method"] = anom.data.get("method_used")
-        if fcst and fcst.status == "success":
-            facts["forecast"] = {
-                "method": fcst.data.get("method"),
-                "direction": fcst.data.get("direction"),
-                "pct_change": fcst.data.get("pct_change"),
-                "horizon": fcst.data.get("horizon"),
-            }
-        if exp and exp.status == "success":
-            facts["experiment"] = {
-                "significant": exp.data.get("significant"),
-                "lift_pct": exp.data.get("lift_pct"),
-                "p_value": exp.data.get("p_value"),
-            }
-        if dbte and dbte.status == "success":
-            facts["debate_verdict"] = dbte.data.get("verdict")
-            facts["red_flags"] = dbte.data.get("red_flags", [])
-        if clst and clst.status == "success":
-            facts["segments"] = clst.data.get("cluster_names", [])
+        debate = context.results.get("debate")
+        if debate and debate.status == "success":
+            facts["debate"] = debate.data
 
-        return llm.complete(
-            system=_BRIEF_SYSTEM,
-            user=f"Facts:\n{json.dumps(facts, indent=2, default=str)}",
-        )
+        prompt = json.dumps(facts, ensure_ascii=False, indent=2)
+        return llm.complete(_BRIEF_SYSTEM, prompt)
 
     def _rule_brief(self, context: AnalysisContext, summaries: dict) -> str:
-        lines = [f"## Analysis Brief — {context.kpi_col or 'Dataset'}\n"]
-        lines.append("## What happened")
-        for agent in ["trend", "root_cause"]:
-            r = context.results.get(agent)
-            if r and r.status == "success":
-                lines.append(f"- {r.summary}")
-        lines.append("\n## Anomalies")
-        r = context.results.get("anomaly")
-        lines.append(f"- {r.summary}" if r and r.status == "success" else "- None detected.")
-        lines.append("\n## Forecast")
-        r = context.results.get("forecast")
-        lines.append(f"- {r.summary}" if r and r.status == "success" else "- Not computed.")
-        lines.append("\n## Experiment / A-B")
-        r = context.results.get("experiment")
-        lines.append(f"- {r.summary}" if r and r.status == "success" else "- No experiment detected.")
-        lines.append("\n## Segments")
-        r = context.results.get("ml_cluster")
-        lines.append(f"- {r.summary}" if r and r.status == "success" else "- No clustering run.")
-        lines.append("\n## Confidence")
-        r = context.results.get("debate")
-        lines.append(f"- {r.summary}" if r and r.status == "success" else "- No debate review.")
-        lines.append("\n## All findings")
-        for agent, s in summaries.items():
-            lines.append(f"- **{agent}**: {s}")
-        return "\n".join(lines)
+        lines = ["## What happened"]
+        for agent, summary in list(summaries.items())[:4]:
+            lines.append(f"- {agent}: {summary}")
+        lines.append("\n## Why it happened")
+        rc = context.results.get('root_cause')
+        if rc and rc.status == 'success':
+            lines.append(f"- {rc.summary}")
+        else:
+            lines.append("- Root-cause evidence is still incomplete.")
+        lines.append("\n## Confidence assessment")
+        debate = context.results.get('debate')
+        if debate and debate.status == 'success':
+            lines.append(f"- Debate verdict: {debate.data.get('verdict', 'medium')}")
+            for flag in (debate.data.get('red_flags') or [])[:2]:
+                lines.append(f"- Red flag: {flag}")
+        else:
+            lines.append("- Confidence is moderate pending challenge review.")
+        lines.append("\n## Recommended actions")
+        for rec in self._rank_recommendations(context)[:3]:
+            lines.append(f"- {rec.action} (score={rec.score})")
+        return '\n'.join(lines)
 
     def _generate_followups(self, context: AnalysisContext, summaries: dict) -> list[str]:
         if config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY:
             try:
-                from llm.client import LLMClient
-                llm = LLMClient()
-                biz = context.business_context
-                facts = "\n".join(f"- {k}: {v}" for k, v in summaries.items())
-                raw = llm.complete(
-                    system=_FOLLOWUP_SYSTEM,
-                    user=f"Business context: {biz}\nKPI: {context.kpi_col}\n\nFindings:\n{facts}",
-                )
-                raw = raw.strip().strip("```json").strip("```").strip()
-                qs = json.loads(raw)
-                return qs[:4] if isinstance(qs, list) else []
+                return self._llm_followups(context, summaries)
             except Exception as e:
-                logger.warning(f"LLM follow-ups failed: {e}")
+                logger.warning(f"LLM follow-up generation failed: {e}")
         return self._rule_followups(context)
+
+    def _llm_followups(self, context: AnalysisContext, summaries: dict) -> list[str]:
+        from llm.client import LLMClient
+        llm = LLMClient()
+        prompt = json.dumps({
+            "kpi": context.kpi_col,
+            "business_context": context.business_context,
+            "summaries": summaries,
+        }, ensure_ascii=False, indent=2)
+        raw = llm.complete(_FOLLOWUP_SYSTEM, prompt)
+        return json.loads(raw)
 
     def _rule_followups(self, context: AnalysisContext) -> list[str]:
         kpi = context.kpi_col or "the KPI"
@@ -185,6 +198,13 @@ class InsightAgent(BaseAgent):
             f"How does the current {kpi} compare to the same period last quarter?",
         ]
 
+    def _rank_recommendations(self, context: AnalysisContext):
+        candidates = context.recommendation_candidates or []
+        if not candidates:
+            candidates = self._collect_recommendation_candidates(context)
+            context.recommendation_candidates = candidates
+        return RecommendationRanker().rank(candidates)
+
     def _save_to_memory(self, context: AnalysisContext, brief: str):
         try:
             from context_engine.org_memory import OrgMemory
@@ -195,7 +215,6 @@ class InsightAgent(BaseAgent):
                 finding=brief[:500],
                 date_range=f"{context.df[context.date_col].min() if context.date_col and not context.df.empty and context.date_col in context.df.columns else 'unknown'} to today",
             )
-            # Save agent plan pattern
             profile = context.data_profile
             sig = f"rows:{profile.get('rows',0)}_ts:{profile.get('has_time_series')}_funnel:{profile.get('has_funnel_signal')}"
             mem.save_pattern(sig, context.active_agents, outcome_quality=4)

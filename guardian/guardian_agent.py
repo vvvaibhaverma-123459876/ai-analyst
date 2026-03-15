@@ -31,6 +31,11 @@ from agents.base_agent import BaseAgent
 from agents.context import AnalysisContext, AgentResult
 from security.policy_store import PolicyStore
 from ground_truth.recorder import GroundTruthRecorder
+from guardian.contradiction_checker import ContradictionChecker
+from guardian.confidence_scorer import ConfidenceScorer
+from guardian.evidence_grader import EvidenceGrader
+from guardian.agent_scoreboard import AgentScoreboard
+from guardian.lesson_extractor import LessonExtractor
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -72,6 +77,11 @@ class GuardianAgent(BaseAgent):
         super().__init__()
         self._policy = PolicyStore(policy_path)
         self._gt = GroundTruthRecorder()
+        self._contradiction_checker = ContradictionChecker()
+        self._confidence_scorer = ConfidenceScorer()
+        self._evidence_grader = EvidenceGrader()
+        self._scoreboard = AgentScoreboard()
+        self._lesson_extractor = LessonExtractor()
         self._db = str(DB_PATH)
         os.makedirs(os.path.dirname(self._db), exist_ok=True)
         self._init_db()
@@ -144,11 +154,25 @@ class GuardianAgent(BaseAgent):
         holdout_warnings = self._enforce_holdout(context)
         verdict.warnings.extend(holdout_warnings)
 
+        reliability = []
+        for name in context.active_agents:
+            rel = self._scoreboard.summary(name).score
+            if rel is not None:
+                reliability.append(rel)
+        avg_rel = sum(reliability) / len(reliability) if reliability else 0.6
+        dq_score = (getattr(context, 'data_quality_report', {}) or {}).get('score')
+        evidence_grade = self._evidence_grader.grade(
+            support_ratio=max(0.0, 1 - (len(verdict.contradictions) * 0.2)),
+            confidence=avg_rel,
+            contradictions=len(verdict.contradictions),
+            data_quality_score=dq_score,
+        )
+        lesson = self._lesson_extractor.extract(context)
         summary = (
             f"Guardian review: approved={verdict.approved}, "
             f"blocked={len(verdict.blocked_findings)}, "
             f"contradictions={len(verdict.contradictions)}, "
-            f"warnings={len(verdict.warnings)}."
+            f"warnings={len(verdict.warnings)}, evidence_grade={evidence_grade.grade}."
         )
 
         return AgentResult(
@@ -162,6 +186,8 @@ class GuardianAgent(BaseAgent):
                 "warnings": verdict.warnings,
                 "contradictions": verdict.contradictions,
                 "prompt_rewrites": verdict.prompt_rewrites,
+                "evidence_grade": evidence_grade.grade,
+                "lesson": lesson,
             },
         )
 
@@ -184,6 +210,10 @@ class GuardianAgent(BaseAgent):
                     """, (name, "default", scenario,
                           precision, 1, datetime.now().isoformat()))
                     conn.commit()
+                try:
+                    self._scoreboard.record(name, precision, context.run_id)
+                except Exception:
+                    pass
 
     def get_agent_reliability(self, agent: str, scenario: str = None) -> dict:
         """Returns decay-weighted reliability score for an agent."""
@@ -216,6 +246,23 @@ class GuardianAgent(BaseAgent):
         score = weighted_sum / total_weight if total_weight > 0 else None
         return {"score": round(score, 3) if score else None, "n": len(rows)}
 
+    def score_run_confidence(self, context: AnalysisContext, evidence_confidence: float = 0.7) -> dict:
+        contradictions = len(self._contradiction_checker.detect(context.results))
+        data_gaps = len(getattr(getattr(context, "research_plan", None), "data_gaps", []) or [])
+        reliability_scores = []
+        for name in context.active_agents:
+            rel = self.get_agent_reliability(name).get("score")
+            if rel is not None:
+                reliability_scores.append(rel)
+        reliability = sum(reliability_scores) / len(reliability_scores) if reliability_scores else None
+        scored = self._confidence_scorer.score(
+            evidence_confidence=evidence_confidence,
+            reliability=reliability,
+            contradictions=contradictions,
+            data_gaps=data_gaps,
+        )
+        return {"score": scored.score, "grade": scored.grade, "reasons": scored.reasons}
+
     # ------------------------------------------------------------------
     # Power 2: Contradiction detection
     # ------------------------------------------------------------------
@@ -223,35 +270,31 @@ class GuardianAgent(BaseAgent):
     def _detect_contradictions(self, context: AnalysisContext, data_sig: str) -> list[dict]:
         contradictions = []
 
+        # 1) Within-run contradiction checks across active agent outputs.
+        contradictions.extend(self._contradiction_checker.detect(context.results))
+
+        # 2) Cross-run contradiction checks against prior ground-truth logs.
         for finding_type in ["anomaly", "root_cause", "forecast"]:
             prior = self._gt.contradiction_check(data_sig, finding_type)
             if len(prior) < 2:
                 continue
 
-            # Check if conclusions have flipped
-            summaries = [p["summary"] for p in prior]
             current_result = context.results.get(finding_type)
             if not current_result or current_result.status != "success":
                 continue
 
-            current_summary = current_result.summary
             prior_summary = prior[0]["summary"] if prior else ""
-
-            # Simple keyword contradiction check
-            pos_words = {"increase", "up", "rise", "growth", "positive"}
-            neg_words = {"decrease", "down", "drop", "decline", "negative"}
-
-            current_pos = any(w in current_summary.lower() for w in pos_words)
-            current_neg = any(w in current_summary.lower() for w in neg_words)
-            prior_pos = any(w in prior_summary.lower() for w in pos_words)
-            prior_neg = any(w in prior_summary.lower() for w in neg_words)
-
-            if (current_pos and prior_neg) or (current_neg and prior_pos):
+            pseudo_results = {
+                "current": current_result,
+                "prior": AgentResult(agent="prior", status="success", summary=prior_summary, data={}),
+            }
+            for item in self._contradiction_checker.detect(pseudo_results, focus_agents=["current", "prior"]):
                 contradictions.append({
                     "finding_type": finding_type,
-                    "current": current_summary[:80],
+                    "current": current_result.summary[:80],
                     "prior": prior_summary[:80],
                     "severity": "high",
+                    "reason": item["reason"],
                 })
 
         return contradictions

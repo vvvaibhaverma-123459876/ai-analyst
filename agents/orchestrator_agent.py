@@ -11,6 +11,7 @@ from agents.base_agent import BaseAgent
 from agents.context import AnalysisContext, AgentResult
 from core.config import config
 from core.logger import get_logger
+from semantic.metric_registry import MetricRegistry
 
 logger = get_logger(__name__)
 
@@ -40,6 +41,10 @@ class OrchestratorAgent(BaseAgent):
     name = "orchestrator"
     description = "Plans agent roster from data profile + business context"
 
+    def __init__(self):
+        super().__init__()
+        self._metric_registry = MetricRegistry()
+
     def _run(self, context: AnalysisContext) -> AgentResult:
         profile = context.data_profile
         doc = context.document
@@ -53,10 +58,11 @@ class OrchestratorAgent(BaseAgent):
                 data={"plan": ALL_AGENTS, "method": "fallback"},
             )
 
-        plan = self._heuristic_plan(profile, doc, biz)
+        plan = self._heuristic_plan(profile, doc, biz, context)
 
         if config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY:
             plan = self._llm_enrich(plan, profile, doc, biz)
+            plan = self._enforce_metric_guardrails(plan, profile, biz, context)
 
         # debate always before insight
         if len(plan) > 2 and "debate" not in plan:
@@ -73,7 +79,7 @@ class OrchestratorAgent(BaseAgent):
             data={"plan": plan},
         )
 
-    def _heuristic_plan(self, profile: dict, doc, biz: dict) -> list[str]:
+    def _heuristic_plan(self, profile: dict, doc, biz: dict, context: AnalysisContext) -> list[str]:
         plan = []
         rows = profile.get("rows", 0)
         has_ts   = profile.get("has_time_series", False)
@@ -87,7 +93,8 @@ class OrchestratorAgent(BaseAgent):
 
         if has_ts and rows >= 14:    plan.append("trend")
         if has_ts and rows >= 20:    plan.append("anomaly")
-        if has_dims and rows >= 10:  plan.append("root_cause")
+        if has_dims and rows >= 10 and self._can_run_root_cause(profile, biz, context):
+            plan.append("root_cause")
         if has_fun:                  plan.append("funnel")
         if has_coh and rows >= 50:   plan.append("cohort")
         if has_ts and rows >= 10:    plan.append("forecast")
@@ -106,6 +113,39 @@ class OrchestratorAgent(BaseAgent):
             plan.append("debate")
         plan.append("insight")
         return plan
+
+    def _can_run_root_cause(self, profile: dict, biz: dict, context: AnalysisContext) -> bool:
+        metric_name = self._resolve_metric_name(biz, context)
+        dims = profile.get("dimensions", []) or []
+        if not metric_name:
+            return True
+        valid_dims = [d for d in dims if self._metric_registry.validate_dimension(metric_name, d)]
+        if not valid_dims:
+            logger.info("Skipping root_cause: no governed dimensions valid for metric '%s'.", metric_name)
+            return False
+        return True
+
+    def _enforce_metric_guardrails(self, plan: list[str], profile: dict, biz: dict, context: AnalysisContext) -> list[str]:
+        if "root_cause" in plan and not self._can_run_root_cause(profile, biz, context):
+            plan = [p for p in plan if p != "root_cause"]
+        return plan
+
+    def _resolve_metric_name(self, biz: dict, context: AnalysisContext) -> str | None:
+        candidates = [
+            biz.get("metric") if isinstance(biz, dict) else None,
+            biz.get("kpi") if isinstance(biz, dict) else None,
+            context.kpi_col,
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                return self._metric_registry.get(candidate).key
+            except Exception:
+                resolved = self._metric_registry.resolve(str(candidate))
+                if resolved:
+                    return resolved
+        return None
 
     def _llm_enrich(self, heuristic: list, profile: dict, doc, biz: dict) -> list[str]:
         try:

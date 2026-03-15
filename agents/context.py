@@ -54,6 +54,13 @@ class AnalysisContext:
     # --- External enrichment ---
     enrichment_context: Any = None      # EnrichmentContext instance
 
+    # --- Truth / trust runtime controls ---
+    data_quality_report: dict = field(default_factory=dict)
+    approval_log: list[dict] = field(default_factory=list)
+    run_manifest: dict = field(default_factory=dict)
+    output_mode: str = 'business'
+    recommendation_candidates: list[dict] = field(default_factory=list)
+
     # --- Learning adaptations (set by learning layer before pipeline) ---
     learning_adaptations: dict = field(default_factory=dict)
 

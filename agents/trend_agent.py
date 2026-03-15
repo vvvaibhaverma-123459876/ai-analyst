@@ -13,11 +13,18 @@ from analysis.statistics import (
     resample_timeseries, period_comparison, add_trend_line, rolling_stats
 )
 from core.config import config
+from semantic.grain_resolver import GrainResolver
+from semantic.metric_registry import MetricRegistry
 
 
 class TrendAgent(BaseAgent):
     name = "trend"
     description = "Time series analysis: resampling, trend line, MoM/WoW/DoD comparisons"
+
+    def __init__(self):
+        super().__init__()
+        self._metric_registry = MetricRegistry()
+        self._grain_resolver = GrainResolver(self._metric_registry)
 
     def _run(self, context: AnalysisContext) -> AgentResult:
         df = context.df
@@ -36,8 +43,12 @@ class TrendAgent(BaseAgent):
         if df.empty:
             return self.skip("No valid rows after date parsing.")
 
+        metric_key = self._resolve_metric_key(context, kpi_col)
+        resolved_grain = self._resolve_runtime_grain(metric_key, context.grain)
+        context.grain = resolved_grain
+
         # Build time series
-        ts = resample_timeseries(df, date_col, kpi_col, context.grain)
+        ts = resample_timeseries(df, date_col, kpi_col, resolved_grain)
         ts = rolling_stats(ts, kpi_col, window=config.DEFAULT_ROLLING_WINDOW)
         ts = add_trend_line(ts, date_col, kpi_col)
 
@@ -76,7 +87,7 @@ class TrendAgent(BaseAgent):
             pass
 
         summary_parts = [
-            f"KPI '{kpi_col}' shows a {direction} trend ({trend_pct:+.1f}% overall)."
+            f"KPI '{kpi_col}' shows a {direction} trend ({trend_pct:+.1f}% overall) at {resolved_grain} grain."
         ]
         for comp_name, comp in comparisons.items():
             summary_parts.append(f"{comp_name}: {comp['pct_change']:+.1f}%")
@@ -95,7 +106,48 @@ class TrendAgent(BaseAgent):
                 "trend_direction": direction,
                 "trend_pct": round(trend_pct, 2),
                 "seasonality_note": seasonality_note,
+                "resolved_grain": resolved_grain,
                 "latest_value": round(ts[kpi_col].iloc[-1], 2) if not ts.empty else None,
-                "data_points": len(ts),
             },
         )
+
+    def _resolve_metric_key(self, context: AnalysisContext, kpi_col: str) -> str | None:
+        candidates = [
+            context.business_context.get("metric") if isinstance(context.business_context, dict) else None,
+            context.business_context.get("kpi") if isinstance(context.business_context, dict) else None,
+            kpi_col,
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                return self._metric_registry.get(str(candidate)).key
+            except Exception:
+                resolved = self._metric_registry.resolve(str(candidate))
+                if resolved:
+                    return resolved
+        return None
+
+    def _resolve_runtime_grain(self, metric_key: str | None, requested_grain: str | None) -> str:
+        if not metric_key:
+            return self._normalise_for_timeseries(requested_grain)
+        semantic_grain = self._grain_resolver.resolve(metric_key, requested_grain)
+        return self._normalise_for_timeseries(semantic_grain)
+
+    @staticmethod
+    def _normalise_for_timeseries(grain: str | None) -> str:
+        if not grain:
+            return "Daily"
+        mapping = {
+            "hourly": "Daily",
+            "daily": "Daily",
+            "weekly": "Weekly",
+            "monthly": "Monthly",
+            "day": "Daily",
+            "week": "Weekly",
+            "month": "Monthly",
+            "Daily": "Daily",
+            "Weekly": "Weekly",
+            "Monthly": "Monthly",
+        }
+        return mapping.get(str(grain), str(grain))

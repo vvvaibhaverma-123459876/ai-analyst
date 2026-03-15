@@ -53,7 +53,7 @@ logger = get_logger(__name__)
 app = FastAPI(
     title="AI Analyst API",
     description="Autonomous analytics platform — enterprise API",
-    version="0.5.0",
+    version="0.7.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -65,6 +65,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# v0.6: mount audit export router
+try:
+    from api.audit_export import build_audit_router
+    _audit_router = build_audit_router()
+    if _audit_router:
+        app.include_router(_audit_router, prefix="/admin")
+except Exception as _e:
+    pass
+
+# v0.6: start scheduler if configured
+_scheduler = None
+try:
+    import os as _os2
+    if _os2.getenv("ENABLE_SCHEDULER", "false").lower() == "true":
+        from scheduler.monitor import AnalyticsScheduler
+        _scheduler = AnalyticsScheduler()
+        _scheduler.start()
+except Exception as _e2:
+    pass
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 job_store = JobStore()
@@ -114,6 +134,14 @@ async def current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
     return data
 
 
+def _assert_job_access(job, user: TokenData) -> None:
+    shell = SecurityShell(tenant_id=job.tenant_id, user_id=user.username, role=getattr(user, 'role', None))
+    try:
+        shell.assert_access(job.tenant_id, resource_owner=job.user_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
 # ------------------------------------------------------------------
 # Jobs
 # ------------------------------------------------------------------
@@ -145,6 +173,7 @@ async def submit_job(
 ):
     """Submit an analysis job. Returns job_id immediately."""
     require_role(user, [Role.ANALYST, Role.ADMIN])
+    SecurityShell(tenant_id=tenant_id, user_id=user.username, role=user.role).assert_access(tenant_id, resource_owner=user.username)
 
     job_id = str(uuid.uuid4())
     content = await file.read()
@@ -179,6 +208,9 @@ async def get_job_status(job_id: str, user: TokenData = Depends(current_user)):
     job = job_store.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    _assert_job_access(job, user)
+    _assert_job_access(job, user)
+    _assert_job_access(job, user)
     return JobStatusResponse(
         job_id=job.job_id,
         status=job.status,
@@ -194,7 +226,11 @@ async def get_brief(job_id: str, user: TokenData = Depends(current_user)):
     job = job_store.get(job_id)
     if not job or job.status != JobStatus.COMPLETE:
         raise HTTPException(status_code=404, detail="Job not found or not complete")
-    return {"job_id": job_id, "brief": job.result.get("brief", ""), "status": job.status}
+    _assert_job_access(job, user)
+    shell = SecurityShell(tenant_id=job.tenant_id, user_id=user.username, role=user.role)
+    payload, classification = shell.publish_output({"job_id": job_id, "brief": job.result.get("brief", ""), "status": job.status}, run_id=job_id, requested_tenant_id=job.tenant_id)
+    payload["output_classification"] = classification
+    return payload
 
 
 @app.get("/jobs/{job_id}/findings", tags=["jobs"])
@@ -202,7 +238,11 @@ async def get_findings(job_id: str, user: TokenData = Depends(current_user)):
     job = job_store.get(job_id)
     if not job or job.status != JobStatus.COMPLETE:
         raise HTTPException(status_code=404, detail="Job not found or not complete")
-    return {"job_id": job_id, "findings": job.result.get("findings", [])}
+    _assert_job_access(job, user)
+    shell = SecurityShell(tenant_id=job.tenant_id, user_id=user.username, role=user.role)
+    payload, classification = shell.publish_output({"job_id": job_id, "findings": job.result.get("findings", [])}, run_id=job_id, requested_tenant_id=job.tenant_id)
+    payload["output_classification"] = classification
+    return payload
 
 
 class VerifyRequest(BaseModel):
@@ -241,6 +281,7 @@ async def verify_finding(
 
 @app.get("/memory/context", tags=["memory"])
 async def get_context(tenant_id: str = "default", user: TokenData = Depends(current_user)):
+    SecurityShell(tenant_id=tenant_id, user_id=user.username, role=user.role).assert_access(tenant_id, resource_owner=user.username)
     mem = OrgMemory()
     return mem.get_all_context()
 
@@ -252,6 +293,7 @@ async def set_context(
     user: TokenData = Depends(current_user),
 ):
     require_role(user, [Role.ANALYST, Role.ADMIN])
+    SecurityShell(tenant_id=tenant_id, user_id=user.username, role=user.role).assert_access(tenant_id, resource_owner=user.username)
     mem = OrgMemory()
     for k, v in body.items():
         mem.set(k, v)
@@ -283,7 +325,7 @@ async def get_policy(user: TokenData = Depends(current_user)):
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "version": "0.5.0", "timestamp": datetime.now().isoformat()}
+    return {"status": "ok", "version": "0.7.1", "timestamp": datetime.now().isoformat()}
 
 
 # ------------------------------------------------------------------
@@ -304,7 +346,7 @@ def _run_job(job_id: str, tenant_id: str, user_id: str):
     job_store.update_status(job_id, JobStatus.RUNNING)
 
     try:
-        shell = SecurityShell(tenant_id=tenant_id, user_id=user_id)
+        shell = SecurityShell(tenant_id=tenant_id, user_id=user_id, role='analyst')
         df = pd.read_csv(io.BytesIO(job.file_content))
         safe_df, sec_report = shell.process_dataframe(df, run_id=job_id)
 
@@ -314,12 +356,16 @@ def _run_job(job_id: str, tenant_id: str, user_id: str):
             kpi_col=job.kpi_col or "",
             grain=job.grain or "Daily",
             filename=job.filename,
+            security_shell=shell,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            run_id=job_id,
         )
 
         runner = AgentRunner()
         finished = runner.run(context)
 
-        job_store.update_result(job_id, {
+        safe_payload, classification = shell.publish_output({
             "brief": finished.final_brief,
             "follow_up_questions": finished.follow_up_questions,
             "findings": [
@@ -328,7 +374,9 @@ def _run_job(job_id: str, tenant_id: str, user_id: str):
             ],
             "agents_run": finished.active_agents,
             "security_report": sec_report.get("summary", ""),
-        })
+        }, run_id=job_id, requested_tenant_id=tenant_id)
+        safe_payload["output_classification"] = classification
+        job_store.update_result(job_id, safe_payload)
         job_store.update_status(job_id, JobStatus.COMPLETE)
         logger.info(f"Job {job_id} completed.")
 

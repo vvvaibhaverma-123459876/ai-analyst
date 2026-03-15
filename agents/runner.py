@@ -19,6 +19,7 @@ Execution order:
 """
 
 from __future__ import annotations
+from pathlib import Path
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,6 +50,10 @@ from science.hypothesis_agent import HypothesisAgent
 from science.feasibility_agent import FeasibilityAgent
 from science.conclusion_engine import ConclusionEngine
 from guardian.guardian_agent import GuardianAgent
+from quality.data_quality_gate import DataQualityGate
+from versioning.run_manifest import RunManifest
+from governance.approval_gate import ApprovalGate
+from guardian.lesson_extractor import LessonExtractor
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -94,8 +99,15 @@ class AgentRunner:
         # Assign run_id
         if not context.run_id:
             context.run_id = str(uuid.uuid4())
+        context.run_manifest = RunManifest.create(context.run_id).to_dict()
+        if context.security_shell is None:
+            try:
+                from security.security_shell import SecurityShell
+                context.security_shell = SecurityShell(tenant_id=context.tenant_id, user_id=context.user_id)
+            except Exception:
+                pass
 
-        logger.info(f"=== v0.5 pipeline starting run_id={context.run_id} ===")
+        logger.info(f"=== v0.7 pipeline starting run_id={context.run_id} ===")
 
         def _start(name: str):
             if on_agent_start: on_agent_start(name)
@@ -110,10 +122,22 @@ class AgentRunner:
         # Phase 1: EDA
         _start("eda"); _done(EDAAgent().run(context))
 
+        # Phase 1b: Data quality gate
+        dq = DataQualityGate().assess(context.df, context.date_col, context.kpi_col)
+        context.data_quality_report = dq.to_dict()
+        context.run_manifest['data_quality_score'] = dq.score
+        if not dq.ok:
+            logger.warning(f"Data quality gate blockers: {dq.blocking_reasons}")
+
+        # Phase 1c: approval boundary marker
+        approval = ApprovalGate().check('policy_change', approved=True, reason='runtime analysis only')
+        context.approval_log.append({'action_type': approval.action_type, 'approved': approval.approved, 'reason': approval.reason})
+
         # Phase 2: Orchestrator
         _start("orchestrator"); _done(OrchestratorAgent().run(context))
 
         active = set(context.active_agents)
+        context.run_manifest['active_agents'] = list(context.active_agents)
 
         # Phase 2b: Scientific reasoning (hypothesis → feasibility)
         _start("hypothesis"); _done(HypothesisAgent().run(context))
@@ -165,6 +189,33 @@ class AgentRunner:
 
         # Phase 7: Post-run learning observations
         self._run_learning_observations(context)
+
+        # Phase 8: lesson extraction + manifest persist
+        try:
+            lx = LessonExtractor()
+            lx.persist(lx.extract(context))
+            manifest = RunManifest(**{k: context.run_manifest.get(k) for k in RunManifest.__dataclass_fields__.keys() if k in context.run_manifest})
+            manifest.active_agents = list(context.active_agents)
+            manifest.data_quality_score = context.data_quality_report.get('score') if context.data_quality_report else None
+            data_dir = Path(__file__).resolve().parent.parent / 'memory' / 'replay_data'
+            data_dir.mkdir(parents=True, exist_ok=True)
+            data_path = data_dir / f'{context.run_id}.csv'
+            try:
+                context.df.to_csv(data_path, index=False)
+                manifest.replay_data_path = str(data_path)
+            except Exception as _replay_e:
+                logger.warning(f'Replay snapshot persist failed (non-fatal): {_replay_e}')
+            manifest.replay_context = {
+                'date_col': context.date_col,
+                'kpi_col': context.kpi_col,
+                'grain': context.grain,
+                'filename': context.filename,
+                'tenant_id': context.tenant_id,
+                'user_id': context.user_id,
+            }
+            manifest.persist()
+        except Exception as e:
+            logger.warning(f"Manifest/lesson persistence failed (non-fatal): {e}")
 
         logger.info(f"=== Pipeline done in {time.time()-t0:.2f}s ===")
         return context

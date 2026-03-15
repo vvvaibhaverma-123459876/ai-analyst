@@ -1,0 +1,56 @@
+# configs/schedule.yaml  — v0.6
+# Proactive analytics monitor jobs.
+# Each job runs on a cron schedule, pulls data via the configured connector,
+# runs anomaly detection, and dispatches alerts on findings.
+#
+# Set ENABLE_SCHEDULER=true in .env to activate.
+# Run standalone: python -m scheduler.monitor
+
+jobs:
+  - id: daily_signups
+    name: Daily signups anomaly monitor
+    connector: postgres           # postgres | snowflake | bigquery | redshift | athena
+    query: |
+      SELECT date_trunc('day', created_at)::date AS date,
+             COUNT(*) AS signups
+      FROM users
+      WHERE created_at >= NOW() - INTERVAL '90 days'
+      GROUP BY 1 ORDER BY 1
+    kpi_col: signups
+    date_col: date
+    cron: "0 8 * * *"           # every day at 08:00 UTC
+    alert_channels: [slack, in_app]
+    tenant_id: default
+    enabled: false               # set to true to activate
+
+  - id: hourly_revenue
+    name: Hourly revenue monitor
+    connector: snowflake
+    query: |
+      SELECT DATE_TRUNC('hour', event_time) AS hour,
+             SUM(amount_usd) AS revenue
+      FROM orders
+      WHERE event_time >= DATEADD(day, -30, CURRENT_TIMESTAMP)
+      GROUP BY 1 ORDER BY 1
+    kpi_col: revenue
+    date_col: hour
+    cron: "0 * * * *"           # every hour
+    alert_channels: [slack]
+    tenant_id: default
+    enabled: false
+
+  - id: daily_activation
+    name: User activation rate (BigQuery)
+    connector: bigquery
+    query: |
+      SELECT DATE(created_at) AS date,
+             COUNTIF(activated) / COUNT(*) AS activation_rate
+      FROM `project.dataset.users`
+      WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
+      GROUP BY 1 ORDER BY 1
+    kpi_col: activation_rate
+    date_col: date
+    cron: "30 7 * * *"
+    alert_channels: [email, in_app]
+    tenant_id: default
+    enabled: false

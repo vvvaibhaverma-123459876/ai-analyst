@@ -42,6 +42,9 @@ class Hypothesis:
     evidence: list[dict] = field(default_factory=list)      # filled by agents
     verdict: str = ""
     confidence: float = 0.0
+    evidence_state: str = "untouched"
+    evidence_grade: str = "unknown"
+    uncertainty_level: str = "unknown"
     supporting_evidence_count: int = 0
     opposing_evidence_count: int = 0
 
@@ -56,6 +59,7 @@ class ResearchPlan:
     data_gaps: list[str] = field(default_factory=list)
     conclusions: list[dict] = field(default_factory=list)
     primary_conclusion: str = ""
+    experiment_spec: Any = None      # v0.6: ExperimentSpec proposed for inconclusive hypotheses
     overall_confidence: float = 0.0
 
     # ------------------------------------------------------------------
@@ -104,7 +108,7 @@ class ResearchPlan:
                 HypothesisStatus.NOT_TESTABLE: "NOT TESTABLE",
             }.get(h.status, h.status.value.upper())
             lines.append(
-                f"{icon} (conf={h.confidence:.2f}): {h.statement}"
+                f"{icon} (conf={h.confidence:.2f}, grade={h.evidence_grade}, uncertainty={h.uncertainty_level}): {h.statement}"
             )
             if h.missing_data:
                 lines.append(f"  → Data needed: {', '.join(h.missing_data)}")

@@ -1,6 +1,5 @@
 # configs/metrics.yaml
-# Define your business metrics here.
-# The LLM uses these to map natural language to correct formulas.
+# Governed business metrics used by semantic registry + SQL generation.
 
 metrics:
   signups:
@@ -9,6 +8,11 @@ metrics:
     column: "signups"
     aggregation: "sum"
     aliases: ["new users", "registrations", "new signups"]
+    dimensions: ["date", "platform", "source", "campaign", "bank"]
+    allowed_grains: ["hourly", "daily", "weekly", "monthly"]
+    owner: "growth_analytics"
+    maturity: "production"
+    source_tables: ["user_funnel_daily"]
 
   revenue:
     label: "Revenue"
@@ -16,6 +20,12 @@ metrics:
     column: "revenue"
     aggregation: "sum"
     aliases: ["total revenue", "earnings", "gmv"]
+    dimensions: ["date", "source", "campaign", "product"]
+    allowed_grains: ["daily", "weekly", "monthly"]
+    owner: "finance_analytics"
+    maturity: "production"
+    source_tables: ["transactions_daily"]
+    caveats: ["Refunded transactions should be excluded from net revenue views."]
 
   conversion_rate:
     label: "Conversion Rate"
@@ -24,6 +34,13 @@ metrics:
     denominator: "signups"
     aggregation: "ratio"
     aliases: ["cvr", "conversion", "success rate"]
+    dimensions: ["date", "platform", "source", "campaign"]
+    allowed_grains: ["daily", "weekly", "monthly"]
+    owner: "growth_analytics"
+    maturity: "production"
+    eligible_population: "All valid signups excluding test and internal traffic"
+    exclusions: ["internal users", "test traffic"]
+    source_tables: ["user_funnel_daily"]
 
   fd_payment_conversion:
     label: "FD Payment Conversion"
@@ -32,6 +49,14 @@ metrics:
     denominator: "fd_payment_initiated"
     aggregation: "ratio"
     aliases: ["fd conversion", "fixed deposit conversion", "fd success rate"]
+    dimensions: ["date", "bank", "platform", "source", "campaign"]
+    allowed_grains: ["hourly", "daily", "weekly"]
+    owner: "secured_cards_growth"
+    maturity: "production"
+    eligible_population: "Users who initiated FD payment"
+    exclusions: ["employee accounts", "internal QA traffic"]
+    source_tables: ["fd_funnel_hourly", "fd_funnel_daily"]
+    caveats: ["Compare same weekday baseline for DoD investigations."]
 
   kyc_completion:
     label: "KYC Completion Rate"
@@ -40,3 +65,9 @@ metrics:
     denominator: "kyc_started"
     aggregation: "ratio"
     aliases: ["kyc rate", "kyc success"]
+    dimensions: ["date", "bank", "platform", "source"]
+    allowed_grains: ["daily", "weekly"]
+    owner: "ops_analytics"
+    maturity: "production"
+    eligible_population: "Users who started KYC"
+    source_tables: ["kyc_funnel_daily"]

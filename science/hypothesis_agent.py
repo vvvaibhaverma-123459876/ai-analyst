@@ -181,19 +181,37 @@ class HypothesisAgent(BaseAgent):
             from context_engine.org_memory import OrgMemory
             mem = OrgMemory()
             kpi = context.kpi_col or ""
-            prior_insights = mem.prior_insights(kpi, n=5)
+
+            # v0.6: use semantic retrieval instead of keyword lookup
+            query = f"anomaly pattern {kpi} {context.business_context.get('industry','')}"
+            semantic_hits = mem.semantic_prior_insights(query, kpi=kpi, n=5)
 
             hypotheses = []
-            for insight in prior_insights[:3]:
-                if not insight:
+            for hit in semantic_hits[:3]:
+                text = hit.get("text", "")
+                if not text:
                     continue
+                score = hit.get("score", 0.5)
                 hypotheses.append(Hypothesis(
                     id=str(uuid.uuid4()),
-                    statement=f"This follows the same pattern as a previous finding: {insight[:80]}",
+                    statement=f"This pattern resembles a prior finding (similarity={score:.2f}): {text[:80]}",
                     source="prior",
-                    novelty_score=0.3,   # prior-based hypotheses start lower novelty
+                    novelty_score=round(1 - score, 3),   # high similarity → low novelty
                     testable=True,
                 ))
+
+            # Fallback: if vector store returned nothing, use keyword
+            if not hypotheses:
+                for insight in mem.prior_insights(kpi, n=3):
+                    if not insight:
+                        continue
+                    hypotheses.append(Hypothesis(
+                        id=str(uuid.uuid4()),
+                        statement=f"This follows the same pattern as a previous finding: {insight[:80]}",
+                        source="prior",
+                        novelty_score=0.3,
+                        testable=True,
+                    ))
             return hypotheses
         except Exception as e:
             logger.warning(f"Prior-driven hypothesis failed: {e}")

@@ -1,14 +1,19 @@
 """
-context_engine/org_memory.py
+context_engine/org_memory.py  — v0.6
 Persistent org-level memory store.
-Stores: company info, KPI definitions, segment definitions,
-prior analyses, user corrections, learned patterns.
-Backed by SQLite. Survives restarts.
+
+Upgrade vs v0.5:
+  - Dual-write: SQLite (audit/export) + VectorStore (semantic retrieval)
+  - semantic_prior_insights()  — returns semantically similar past findings
+  - semantic_search_context()  — free-text search across all org knowledge
+  - All write operations also index into the vector store
+  - Falls back gracefully to keyword search if vector store unavailable
 """
 
 from __future__ import annotations
 import sqlite3
 import json
+import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
@@ -195,6 +200,142 @@ class OrgMemory:
             for kpi in kpis:
                 lines.append(f"{kpi['name']}: {kpi['definition']} | formula: {kpi['formula']}")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Vector store (lazy init — never blocks startup)
+    # ------------------------------------------------------------------
+
+    def _vs(self):
+        if not hasattr(self, "_vector_store"):
+            try:
+                from memory.vector_store import vector_store
+                self._vector_store = vector_store()
+            except Exception as e:
+                logger.warning(f"VectorStore unavailable: {e}")
+                self._vector_store = None
+        return self._vector_store
+
+    # ------------------------------------------------------------------
+    # Semantic retrieval
+    # ------------------------------------------------------------------
+
+    def semantic_prior_insights(self, query: str, kpi: str = "",
+                                n: int = 5, min_score: float = 0.3) -> list[dict]:
+        """
+        Returns semantically similar past findings for a query.
+        Each result: {"text": ..., "kpi": ..., "score": ..., "date": ...}
+        Falls back to keyword prior_insights() if vector store is unavailable.
+        """
+        vs = self._vs()
+        if vs is None:
+            # Graceful fallback
+            return [{"text": t, "kpi": kpi, "score": 0.5, "date": ""}
+                    for t in self.prior_insights(kpi, n)]
+        where = {"kpi": {"$eq": kpi}} if kpi else None
+        results = vs.query("insights", query, n=n, where=where) if where else \
+                  vs.query("insights", query, n=n)
+        return [
+            {
+                "text": r["text"],
+                "kpi": r["metadata"].get("kpi", ""),
+                "score": r["score"],
+                "date": r["metadata"].get("date", ""),
+            }
+            for r in results if r["score"] >= min_score
+        ]
+
+    def semantic_search_context(self, query: str, n: int = 8) -> list[dict]:
+        """
+        Free-text semantic search across ALL org knowledge collections.
+        Returns merged, ranked results from insights + corrections + patterns + context.
+        """
+        vs = self._vs()
+        if vs is None:
+            return []
+        all_results = []
+        for col in ["insights", "corrections", "patterns", "context"]:
+            hits = vs.query(col, query, n=max(n // 4, 2))
+            for h in hits:
+                h["collection"] = col
+            all_results.extend(hits)
+        all_results.sort(key=lambda x: x["score"], reverse=True)
+        return all_results[:n]
+
+    def to_semantic_prompt_context(self, query: str, max_items: int = 6) -> str:
+        """
+        Build a rich LLM prompt context using semantic retrieval instead of
+        full-table dumps. Surfaces the most relevant org knowledge for the query.
+        """
+        results = self.semantic_search_context(query, n=max_items)
+        if not results:
+            return self.to_prompt_context()     # fallback to original
+
+        lines = ["=== Semantically Retrieved Org Context ==="]
+        for r in results:
+            col = r.get("collection", "?")
+            score = r.get("score", 0)
+            lines.append(f"[{col} | relevance={score:.2f}] {r['text']}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Override write methods to dual-write into vector store
+    # ------------------------------------------------------------------
+
+    def save_insight(self, kpi: str, finding: str, date_range: str = ""):
+        # SQLite write (original)
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "INSERT INTO insight_history VALUES (NULL, ?, ?, ?, ?)",
+                (kpi, finding, date_range, datetime.now().isoformat())
+            )
+            conn.commit()
+        # Vector write
+        vs = self._vs()
+        if vs:
+            doc_id = hashlib.md5(f"{kpi}:{finding}".encode()).hexdigest()
+            vs.upsert("insights", doc_id, finding,
+                      metadata={"kpi": kpi, "date": date_range})
+
+    def save_correction(self, original: str, correction: str, context: str = ""):
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "INSERT INTO user_corrections VALUES (NULL, ?, ?, ?, ?)",
+                (original, correction, context, datetime.now().isoformat())
+            )
+            conn.commit()
+        vs = self._vs()
+        if vs:
+            doc_id = hashlib.md5(f"{original}:{correction}".encode()).hexdigest()
+            vs.upsert("corrections", doc_id,
+                      f"Original: {original}\nCorrection: {correction}",
+                      metadata={"context": context})
+
+    def save_pattern(self, data_signature: str, agent_plan: list, outcome_quality: int = 3):
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "INSERT INTO analysis_patterns VALUES (NULL, ?, ?, ?, ?)",
+                (data_signature, json.dumps(agent_plan), outcome_quality,
+                 datetime.now().isoformat())
+            )
+            conn.commit()
+        vs = self._vs()
+        if vs:
+            doc_id = hashlib.md5(data_signature.encode()).hexdigest()
+            vs.upsert("patterns", doc_id,
+                      f"Data pattern: {data_signature}\nPlan: {agent_plan}",
+                      metadata={"signature": data_signature, "quality": outcome_quality})
+
+    def set(self, key: str, value):
+        with sqlite3.connect(self._db) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO business_context VALUES (?, ?, ?)",
+                (key, json.dumps(value), datetime.now().isoformat())
+            )
+            conn.commit()
+        vs = self._vs()
+        if vs:
+            vs.upsert("context", key, f"{key}: {json.dumps(value)}",
+                      metadata={"key": key})
 
     def clear(self):
         with sqlite3.connect(self._db) as conn:
