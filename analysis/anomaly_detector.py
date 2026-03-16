@@ -158,9 +158,17 @@ class AnomalyDetector(AnalysisContract):
     # ------------------------------------------------------------------
 
     def detect_zscore(self, ts: pd.DataFrame, date_col: str,
-                      value_col: str = "", kpi_col: str = "",
-                      window: int = None, z_threshold: float = None) -> pd.DataFrame:
-        """Legacy method — returns annotated DataFrame as before."""
+                      value_col: str = "",
+                      window: int = None, z_threshold: float = None,
+                      *, kpi_col: str = "") -> pd.DataFrame:
+        """Legacy method — returns annotated DataFrame as before.
+
+        Positional signature (preserved from original):
+            detect_zscore(ts, date_col, value_col, window, z_threshold)
+
+        kpi_col is keyword-only — never pass it positionally.
+        (Positional kpi_col was the cause of KeyError: 7)
+        """
         col = kpi_col or value_col
         w   = window or self.window
         zt  = z_threshold or self.z_threshold

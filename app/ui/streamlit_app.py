@@ -111,8 +111,7 @@ with st.sidebar:
     history_records = mods["history"].recent(5)
     if history_records:
         for rec in history_records:
-            st.caption(f"🕐 {rec['timestamp'][:16]}  
-{rec['question'][:50]}")
+            st.caption(f"🕐 {rec['timestamp'][:16]} | {rec['question'][:50]}")
     else:
         st.caption("No history yet.")
 

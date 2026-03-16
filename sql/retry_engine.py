@@ -67,3 +67,32 @@ class SQLRetryEngine:
         llm = LLMClient()
         user = f"Previous SQL:\n{bad_sql}\n\nError:\n{error_msg}\n\nFix the SQL."
         return llm.complete(system=_RETRY_SYSTEM, user=user)
+
+    def execute_with_retry(
+        self,
+        fn,
+        sql: str = "",
+        **kwargs,
+    ):
+        """
+        Generic retry wrapper for any callable that accepts a sql string.
+
+        Retries up to self._max_retries times on any Exception.
+        The callable receives sql as its first positional argument.
+
+        Usage:
+            engine.execute_with_retry(lambda sql: connector.execute(sql), sql=query)
+        """
+        last_exc = None
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                return fn(sql, **kwargs)
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    f"execute_with_retry attempt {attempt}/{self._max_retries} failed: {exc}"
+                )
+                if attempt == self._max_retries:
+                    raise
+        raise last_exc  # unreachable but satisfies type checkers
+

@@ -85,6 +85,10 @@ class PolicyStore:
     # Check methods — called by Guardian before publishing findings
     # ------------------------------------------------------------------
 
+    def set(self, key: str, value) -> None:
+        """Write a policy value at runtime (for testing and admin overrides)."""
+        self._policy[key] = value
+
     def check_sample_size(self, n: int) -> PolicyViolation | None:
         min_n = self._policy["min_sample_size"]
         if n < min_n:

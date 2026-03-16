@@ -84,11 +84,15 @@ class PIIMasker:
         )
         return masked, report
 
-    def mask_prompt(self, prompt: str) -> str:
+    def mask_prompt(self, prompt: str | None) -> str:
         """
         Scans a prompt string for PII patterns and redacts them.
         Applied before any string is sent to an LLM.
+        Returns empty string for None input.
         """
+        if prompt is None:
+            return ""
+        prompt = str(prompt)
         # Email addresses
         prompt = re.sub(
             r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
