@@ -1,16 +1,82 @@
 """
-analysis/funnel_analyzer.py
+analysis/funnel_analyzer.py  — v10
 Funnel analysis: step conversion, drop-off rates, stage-wise comparison.
+
+v10: implements AnalysisContract — analyze() is the canonical entry point.
+     All existing methods preserved for backward-compat with agents.
 """
 
 import pandas as pd
 import numpy as np
+from analysis.contract import AnalysisContract, AnalysisResult
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class FunnelAnalyzer:
+class FunnelAnalyzer(AnalysisContract):
+
+    module_name = "funnel"
+
+    # ------------------------------------------------------------------
+    # AnalysisContract: canonical entry point
+    # ------------------------------------------------------------------
+
+    def analyze(self, df: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """
+        Contract entry point.  kwargs accepted:
+          stage_col, user_col, stages (list), date_col, date_filter
+        Returns AnalysisResult with funnel DataFrame in metadata["funnel_df"].
+        """
+        stage_col  = kwargs.get("stage_col", "")
+        user_col   = kwargs.get("user_col", "")
+        stages     = kwargs.get("stages")
+        date_col   = kwargs.get("date_col")
+        date_filter= kwargs.get("date_filter")
+
+        required = [c for c in [stage_col, user_col] if c]
+        errors = self.validate_inputs(df, required_cols=required, min_rows=2)
+        if errors:
+            return AnalysisResult(
+                module=self.module_name, ok=False, errors=errors,
+                summary="Funnel analysis could not run.", method="funnel",
+            )
+
+        try:
+            funnel_df = self.compute_funnel(
+                df, stage_col, user_col, stages, date_col, date_filter
+            )
+            drop = self.biggest_drop(funnel_df)
+            n_stages    = len(funnel_df)
+            top_users   = int(funnel_df.iloc[0]["users"]) if not funnel_df.empty else 0
+            bottom_rate = float(funnel_df.iloc[-1]["conversion_from_top_pct"]) if not funnel_df.empty else 0.0
+            summary = (
+                f"Funnel: {n_stages} stages, {top_users} top-of-funnel users, "
+                f"{bottom_rate:.1f}% end-to-end conversion."
+            )
+            if drop:
+                summary += f" Biggest drop at '{drop['stage']}' ({drop['drop_off_pct']:.1f}% lost)."
+
+            return AnalysisResult(
+                module=self.module_name,
+                ok=True,
+                records=funnel_df.to_dict("records"),
+                summary=summary,
+                confidence=1.0,
+                method="funnel",
+                metadata={
+                    "funnel_df":  funnel_df,
+                    "biggest_drop": drop,
+                    "n_stages":   n_stages,
+                    "top_users":  top_users,
+                    "end_to_end_pct": bottom_rate,
+                },
+            )
+        except Exception as e:
+            return AnalysisResult(
+                module=self.module_name, ok=False,
+                errors=[str(e)], summary=f"Funnel error: {e}", method="funnel",
+            )
 
     def compute_funnel(
         self,

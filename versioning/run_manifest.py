@@ -53,6 +53,10 @@ class RunManifest:
     # ── Notes ─────────────────────────────────────────────────────────
     notes: list[str]                = field(default_factory=list)
 
+    # ── Run outcome (v10) ────────────────────────────────────────────
+    status: str                     = "ok"     # "ok" | "failed"
+    error: str                      = ""       # exception message if failed
+
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict:

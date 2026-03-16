@@ -1,17 +1,91 @@
 """
-analysis/root_cause.py
-Root cause analysis: driver attribution (from app.py) + contribution analysis.
+analysis/root_cause.py  — v10
+Root cause analysis: driver attribution + contribution analysis.
+
+v10: implements AnalysisContract — analyze() is the canonical entry point.
+     All existing methods preserved for backward-compat with agents.
 """
 
 import pandas as pd
 import numpy as np
+from analysis.contract import AnalysisContract, AnalysisResult
 from core.config import config
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class RootCauseAnalyzer:
+class RootCauseAnalyzer(AnalysisContract):
+
+    module_name = "root_cause"
+
+    # ------------------------------------------------------------------
+    # AnalysisContract: canonical entry point
+    # ------------------------------------------------------------------
+
+    def analyze(self, df: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """
+        Contract entry point.  kwargs accepted:
+          date_col, kpi_col (or value_col alias), days
+        Returns AnalysisResult with drivers DataFrame in metadata["drivers"].
+        """
+        date_col = kwargs.get("date_col", "")
+        kpi_col  = kwargs.get("kpi_col") or kwargs.get("value_col", "")
+        days     = kwargs.get("days")
+
+        required = [c for c in [date_col, kpi_col] if c]
+        errors = self.validate_inputs(df, required_cols=required, min_rows=6)
+        if errors:
+            return AnalysisResult(
+                module=self.module_name, ok=False, errors=errors,
+                summary="Root cause analysis could not run.", method="driver_attribution",
+            )
+
+        try:
+            result = self.driver_attribution(df, date_col, kpi_col, days)
+            drivers  = result["drivers"]
+            movers   = self.top_movers(drivers, n=5)
+            delta    = result["delta"]
+            pct      = result["pct_change"]
+            direction = "up" if delta >= 0 else "down"
+            neg_drivers = movers.get("negative", [])
+            top_neg = neg_drivers[0] if neg_drivers else {}
+
+            summary = (
+                f"{kpi_col} {direction} {abs(pct):.1f}% "
+                f"(delta={delta:+.0f})."
+            )
+            if top_neg:
+                summary += (
+                    f" Primary driver: {top_neg.get('dimension')}="
+                    f"{top_neg.get('value')} "
+                    f"({top_neg.get('pct_contribution',0):+.1f}% contribution)."
+                )
+
+            return AnalysisResult(
+                module=self.module_name,
+                ok=True,
+                records=drivers.to_dict("records") if not drivers.empty else [],
+                summary=summary,
+                confidence=1.0,
+                method="driver_attribution",
+                metadata={
+                    "drivers":    drivers,
+                    "movers":     movers,
+                    "delta":      delta,
+                    "pct_change": pct,
+                    "last_total": result["last_total"],
+                    "prev_total": result["prev_total"],
+                    "period_last": result["period_last"],
+                    "period_prev": result["period_prev"],
+                },
+            )
+        except Exception as e:
+            return AnalysisResult(
+                module=self.module_name, ok=False,
+                errors=[str(e)], summary=f"Root cause error: {e}",
+                method="driver_attribution",
+            )
 
     # ------------------------------------------------------------------
     # Driver Attribution (preserved + extended from app.py)

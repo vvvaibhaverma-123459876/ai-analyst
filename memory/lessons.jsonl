@@ -1,1 +1,1 @@
-{"run_id": "r1-replay", "kpi": "k", "active_agents": ["insight"], "data_quality_score": 0.35, "contradictions": 0, "primary_conclusion": "", "timestamp": "2026-03-15T06:56:00.269020"}
+{"run_id": "s-3d61d0f4", "kpi": "revenue", "active_agents": ["trend", "anomaly", "forecast", "debate", "insight"], "data_quality_score": 1.0, "contradictions": 0, "primary_conclusion": "", "timestamp": "2026-03-16T02:59:15.334313"}

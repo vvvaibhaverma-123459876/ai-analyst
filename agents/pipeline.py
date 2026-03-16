@@ -119,7 +119,7 @@ class GovernedPipeline:
             except Exception as e:
                 logger.warning("SecurityShell init failed (non-fatal): %s", e)
 
-        logger.info("=== v9 GovernedPipeline run_id=%s ===", context.run_id)
+        logger.info("=== v10 GovernedPipeline run_id=%s ===", context.run_id)
 
         def _start(name: str):
             if on_agent_start:
@@ -173,22 +173,30 @@ class GovernedPipeline:
             _done(AGENT_REGISTRY["trend"]().run(context))
 
         # ── Phase 5: Parallel analysis ───────────────────────────────
+        # Phase barrier: snapshot before parallel — agents read consistent state.
         parallel = [n for n in PARALLEL_AGENTS if n in active]
         if parallel:
+            phase5_snapshot = context.freeze()
             with ThreadPoolExecutor(max_workers=self._max_workers) as ex:
                 futures = {
-                    ex.submit(AGENT_REGISTRY[n]().run, context): n
+                    ex.submit(AGENT_REGISTRY[n]().run, phase5_snapshot): n
                     for n in parallel
                 }
                 for future in as_completed(futures):
                     n = futures[future]
                     try:
-                        _done(future.result())
+                        r = future.result()
+                        context.write_result(r)
+                        if on_agent_done:
+                            on_agent_done(r)
                     except Exception as e:
                         logger.error("Agent '%s' raised: %s", n, e)
-                        _done(AgentResult(agent=n, status="error",
+                        err = AgentResult(agent=n, status="error",
                                           summary=f"Unhandled error: {e}",
-                                          data={}, error=str(e)))
+                                          data={}, error=str(e))
+                        context.write_result(err)
+                        if on_agent_done:
+                            on_agent_done(err)
 
         # ── Phase 5b: External enrichment (non-blocking) ─────────────
         self._run_enrichment(context)
@@ -218,6 +226,39 @@ class GovernedPipeline:
 
         logger.info("=== Pipeline done in %.2fs ===", time.time() - t0)
         return context
+
+    def _safe_run(
+        self,
+        context: "AnalysisContext",
+        on_agent_start=None,
+        on_agent_done=None,
+    ) -> "AnalysisContext":
+        """
+        Thin wrapper around run() that guarantees manifest persistence
+        even when the pipeline raises. Failed runs are no longer invisible.
+        """
+        try:
+            return self.run(context, on_agent_start=on_agent_start,
+                            on_agent_done=on_agent_done)
+        except Exception as e:
+            context.run_manifest["status"] = "failed"
+            context.run_manifest["error"]  = str(e)
+            context.run_manifest.setdefault("output_classification", "INTERNAL")
+            logger.error("Pipeline failed run_id=%s: %s", context.run_id, e)
+            raise
+        finally:
+            # Always persist — successful, failed, or exception runs all leave a trace.
+            try:
+                m_fields = RunManifest.__dataclass_fields__
+                m = RunManifest(**{k: context.run_manifest.get(k)
+                                   for k in m_fields if k in context.run_manifest})
+                m.active_agents = list(context.active_agents)
+                if context.data_quality_report:
+                    m.data_quality_score = context.data_quality_report.get("score")
+                m.persist()
+                logger.info("RunManifest persisted (finally) run_id=%s", context.run_id)
+            except Exception as me:
+                logger.warning("Manifest persist in finally failed: %s", me)
 
     # ------------------------------------------------------------------
     # Phase 2: Semantic resolution

@@ -1,14 +1,90 @@
 """
-analysis/statistics.py
+analysis/statistics.py  — v10
 Time series helpers: resampling, trend line, MoM/WoW/DoD comparisons.
+
+v10: adds StatisticsAnalyzer(AnalysisContract) — free functions preserved
+     for full backward-compat with trend_agent and other callers.
 """
 
 import pandas as pd
 import numpy as np
+from analysis.contract import AnalysisContract, AnalysisResult
 from core.constants import RESAMPLE_MAP
 from core.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class StatisticsAnalyzer(AnalysisContract):
+    """
+    Contract-compliant wrapper around the free functions below.
+    analyze() runs a full period comparison suite on the supplied DataFrame.
+    """
+
+    module_name = "statistics"
+
+    def analyze(self, df: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """
+        Contract entry point.  kwargs accepted:
+          date_col, value_col (or kpi_col alias), grain, comparisons list
+        Returns period comparisons in metadata["comparisons"].
+        """
+        date_col    = kwargs.get("date_col", "")
+        value_col   = kwargs.get("value_col") or kwargs.get("kpi_col", "")
+        grain       = kwargs.get("grain", "Daily")
+        comparisons = kwargs.get("comparisons", ["DoD", "WoW", "MoM"])
+
+        required = [c for c in [date_col, value_col] if c]
+        errors = self.validate_inputs(df, required_cols=required, min_rows=2)
+        if errors:
+            return AnalysisResult(
+                module=self.module_name, ok=False, errors=errors,
+                summary="Statistics analysis could not run.", method="period_comparison",
+            )
+
+        try:
+            ts = resample_timeseries(df, date_col, value_col, grain)
+            ts = add_trend_line(ts, date_col, value_col)
+            ts = rolling_stats(ts, value_col)
+
+            comp_results: dict = {}
+            for comp in comparisons:
+                try:
+                    comp_results[comp] = period_comparison(df, date_col, value_col, comp)
+                except Exception:
+                    pass
+
+            latest = float(ts[value_col].iloc[-1]) if not ts.empty else 0.0
+            wow    = comp_results.get("WoW", {})
+            pct    = wow.get("pct_change", 0.0)
+            direction = "up" if pct >= 0 else "down"
+            summary = (
+                f"Latest {value_col}: {latest:,.2f}. "
+                f"WoW {direction} {abs(pct):.1f}%."
+                if wow else
+                f"Latest {value_col}: {latest:,.2f}."
+            )
+
+            return AnalysisResult(
+                module=self.module_name,
+                ok=True,
+                records=ts.to_dict("records"),
+                summary=summary,
+                confidence=1.0,
+                method="period_comparison",
+                metadata={
+                    "ts":          ts,
+                    "comparisons": comp_results,
+                    "latest":      latest,
+                    "grain":       grain,
+                },
+            )
+        except Exception as e:
+            return AnalysisResult(
+                module=self.module_name, ok=False,
+                errors=[str(e)], summary=f"Statistics error: {e}",
+                method="period_comparison",
+            )
 
 
 def resample_timeseries(

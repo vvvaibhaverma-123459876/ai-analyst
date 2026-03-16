@@ -111,6 +111,68 @@ def _check_analysis_contract_exists() -> str | None:
 
 # ── Checklist ─────────────────────────────────────────────────────────
 
+
+def _check_analysis_contract_coverage() -> str | None:
+    """All core analysis modules must be AnalysisContract subclasses."""
+    REQUIRED = {
+        "AnomalyDetector":    ("analysis.anomaly_detector", "AnomalyDetector"),
+        "FunnelAnalyzer":     ("analysis.funnel_analyzer",  "FunnelAnalyzer"),
+        "CohortAnalyzer":     ("analysis.cohort_analyzer",  "CohortAnalyzer"),
+        "RootCauseAnalyzer":  ("analysis.root_cause",       "RootCauseAnalyzer"),
+        "StatisticsAnalyzer": ("analysis.statistics",       "StatisticsAnalyzer"),
+    }
+    try:
+        import importlib
+        from analysis.contract import AnalysisContract
+        missing = []
+        for label, (mod_path, cls_name) in REQUIRED.items():
+            try:
+                mod = importlib.import_module(mod_path)
+                cls = getattr(mod, cls_name)
+                if not issubclass(cls, AnalysisContract):
+                    missing.append(f"{label} not subclass of AnalysisContract")
+            except Exception as e:
+                missing.append(f"{label}: {e}")
+        if missing:
+            return "Contract migration incomplete: " + "; ".join(missing)
+    except Exception as e:
+        return f"Contract coverage check failed: {e}"
+    return None
+
+
+
+def _check_phase_barrier_exists() -> str | None:
+    """AnalysisContext must have a freeze() method (phase barrier)."""
+    try:
+        from agents.context import AnalysisContext, ContextSnapshot
+        import inspect
+        if not hasattr(AnalysisContext, "freeze"):
+            return "AnalysisContext.freeze() missing — phase barrier not implemented."
+        sig = inspect.signature(AnalysisContext.freeze)
+        # freeze() should return ContextSnapshot
+        return None
+    except Exception as e:
+        return f"Phase barrier check failed: {e}"
+
+
+
+def _check_manifest_persistence_guaranteed() -> str | None:
+    """_safe_run() must exist and have a finally block that persists the manifest."""
+    try:
+        import inspect
+        from agents.pipeline import GovernedPipeline
+        if not hasattr(GovernedPipeline, "_safe_run"):
+            return "GovernedPipeline._safe_run() missing — failed runs invisible to audit."
+        source = inspect.getsource(GovernedPipeline._safe_run)
+        if "finally" not in source:
+            return "_safe_run() has no finally block."
+        if "persist" not in source:
+            return "_safe_run() finally block does not call manifest.persist()."
+        return None
+    except Exception as e:
+        return f"Manifest persistence check failed: {e}"
+
+
 CHECKS = [
     ("no_active_metric_store",          _check_no_active_metric_store),
     ("pipeline_is_governed",            _check_pipeline_is_governed),
@@ -120,6 +182,9 @@ CHECKS = [
     ("security_boundaries_file_exists", _check_security_boundaries_file_exists),
     ("run_manifest_has_classification", _check_run_manifest_has_output_classification),
     ("analysis_contract_exists",        _check_analysis_contract_exists),
+    ("analysis_contract_coverage",       _check_analysis_contract_coverage),
+    ("phase_barrier_exists",             _check_phase_barrier_exists),
+    ("manifest_persistence_guaranteed",   _check_manifest_persistence_guaranteed),
 ]
 
 

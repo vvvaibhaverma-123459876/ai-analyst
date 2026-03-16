@@ -1,16 +1,88 @@
 """
-analysis/cohort_analyzer.py
+analysis/cohort_analyzer.py  — v10
 Cohort analysis: signup cohort retention, time-to-convert, D1/D7/D30.
+
+v10: implements AnalysisContract — analyze() is the canonical entry point.
+     All existing methods preserved for backward-compat with agents.
 """
 
 import pandas as pd
 import numpy as np
+from analysis.contract import AnalysisContract, AnalysisResult
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class CohortAnalyzer:
+class CohortAnalyzer(AnalysisContract):
+
+    module_name = "cohort"
+
+    # ------------------------------------------------------------------
+    # AnalysisContract: canonical entry point
+    # ------------------------------------------------------------------
+
+    def analyze(self, df: pd.DataFrame, **kwargs) -> AnalysisResult:
+        """
+        Contract entry point.  kwargs accepted:
+          user_col, date_col, kpi_col, cohort_grain ('D'|'W'|'M'), periods
+        Returns AnalysisResult with retention matrix in metadata["retention_matrix"].
+        """
+        user_col     = kwargs.get("user_col", "")
+        date_col     = kwargs.get("date_col", "")
+        kpi_col      = kwargs.get("kpi_col")
+        cohort_grain = kwargs.get("cohort_grain", "M")
+        periods      = kwargs.get("periods", [1, 7, 30])
+
+        required = [c for c in [user_col, date_col] if c]
+        errors = self.validate_inputs(df, required_cols=required, min_rows=10)
+        if errors:
+            return AnalysisResult(
+                module=self.module_name, ok=False, errors=errors,
+                summary="Cohort analysis could not run.", method="cohort_retention",
+            )
+
+        try:
+            matrix = self.build_retention_matrix(df, user_col, date_col, cohort_grain)
+            n_cohorts = len(matrix)
+
+            # D1 retention — first non-cohort-size column
+            d1_col = matrix.columns[1] if len(matrix.columns) > 1 else None
+            avg_d1 = float(matrix[d1_col].mean()) if d1_col is not None else 0.0
+
+            summary = (
+                f"Cohort retention: {n_cohorts} cohorts ({cohort_grain} grain), "
+                f"avg {d1_col or 'Period 1'} retention = {avg_d1:.1f}%."
+            )
+
+            kpi_summary = {}
+            if kpi_col and kpi_col in df.columns:
+                kpi_pivot = self.cohort_kpi_summary(
+                    df, user_col, date_col, kpi_col, cohort_grain, periods
+                )
+                kpi_summary = kpi_pivot.to_dict()
+
+            return AnalysisResult(
+                module=self.module_name,
+                ok=True,
+                records=matrix.reset_index().to_dict("records"),
+                summary=summary,
+                confidence=1.0,
+                method="cohort_retention",
+                metadata={
+                    "retention_matrix": matrix,
+                    "n_cohorts":  n_cohorts,
+                    "avg_d1_pct": avg_d1,
+                    "kpi_summary": kpi_summary,
+                    "cohort_grain": cohort_grain,
+                },
+            )
+        except Exception as e:
+            return AnalysisResult(
+                module=self.module_name, ok=False,
+                errors=[str(e)], summary=f"Cohort error: {e}",
+                method="cohort_retention",
+            )
 
     def build_retention_matrix(
         self,
