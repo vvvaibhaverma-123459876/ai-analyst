@@ -1,3 +1,45 @@
+# AI Analyst Command Center — Production UI Pass
+
+This repo now includes a modern product-style UI designed to show the true capability of the AI Analyst platform.
+
+## Recommended commands
+
+```bash
+# install lean test/dev dependencies
+pip install -r requirements-ci.txt
+pip install streamlit plotly python-multipart uvicorn
+
+# run the modern app UI
+streamlit run app/ui/product_app.py
+
+# backwards-compatible canonical UI command
+streamlit run app/ui/v06_app.py
+
+# run API
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+# validate
+python -m compileall .
+pytest -q
+```
+
+## What the production UI adds
+
+- Guided app workflow: connect data → validate schema → run governed analysis → act.
+- Modern command-center interface with app-like dark visual design.
+- Real capability visibility: semantic layer, security shell, anomaly jury, root cause, forecast, guardian, memory/audit/export.
+- Fintech onboarding demo dataset aligned with card/funnel analytics.
+- Deep-dive tabs for trend, anomaly, root cause, funnel, cohort, forecast, agents, grounded chat, and export.
+- Backwards compatibility: `app/ui/v06_app.py` delegates to the product UI.
+
+See:
+
+- `docs/ui_product_strategy.md`
+- `docs/production_readiness.md`
+- `docs/demo_script.md`
+
+---
+
 # AI Analyst v9 — Convergence, Enforcement, Cleanup, Proof
 
 v9 is the first version that makes honest claims about what it delivers.

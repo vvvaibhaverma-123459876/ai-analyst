@@ -39,12 +39,15 @@ class MLClusterAgent(BaseAgent):
         if n < 20:
             return self.skip(f"Only {n} rows — need at least 20 for clustering.")
 
-        X = df[feature_cols].dropna()
-        valid_idx = X.index
-        if len(X) < 20:
+        X_full = df[feature_cols].dropna()
+        valid_idx = X_full.index
+        if len(X_full) < 20:
             return self.skip("Too many nulls in numeric columns.")
 
-        # Scale
+        # Scale + fit on a capped sample. silhouette_score is O(n^2), so running
+        # it on large event-level datasets can freeze the UI. Production behavior
+        # should be fast and predictable: learn clusters from a representative
+        # sample, then predict labels for the full valid dataset.
         try:
             from sklearn.preprocessing import StandardScaler
             from sklearn.cluster import KMeans
@@ -52,22 +55,35 @@ class MLClusterAgent(BaseAgent):
         except ImportError:
             return self.skip("scikit-learn not installed. Run: pip install scikit-learn")
 
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        import os
+        max_rows = int(os.getenv("AI_ANALYST_CLUSTER_MAX_ROWS", "500"))
+        if len(X_full) > max_rows:
+            X_fit = X_full.sample(max_rows, random_state=42)
+        else:
+            X_fit = X_full
 
-        # Auto-select K
-        best_k, best_score, best_labels = 2, -1, None
-        max_k = min(8, len(X) // 5)
+        scaler = StandardScaler()
+        X_fit_scaled = scaler.fit_transform(X_fit)
+        X_full_scaled = scaler.transform(X_full)
+
+        # Auto-select K on the capped fit sample.
+        best_k, best_score, best_model = 2, -1, None
+        max_k = min(8, max(2, len(X_fit) // 5))
         for k in range(2, max_k + 1):
             km = KMeans(n_clusters=k, random_state=42, n_init=10)
-            labels = km.fit_predict(X_scaled)
-            score = silhouette_score(X_scaled, labels)
+            sample_labels = km.fit_predict(X_fit_scaled)
+            score = silhouette_score(X_fit_scaled, sample_labels) if len(set(sample_labels)) > 1 else -1
             if score > best_score:
-                best_k, best_score, best_labels = k, score, labels
+                best_k, best_score, best_model = k, score, km
+
+        if best_model is None:
+            return self.skip("Could not fit a stable clustering model.")
+
+        full_labels = best_model.predict(X_full_scaled)
 
         # Attach cluster labels back to df
         df_clustered = df.loc[valid_idx].copy()
-        df_clustered["cluster"] = best_labels
+        df_clustered["cluster"] = full_labels
 
         # Profile clusters
         profiles = []
@@ -90,7 +106,7 @@ class MLClusterAgent(BaseAgent):
         cluster_names = self._name_clusters(profiles, feature_cols, context)
 
         # Optional UMAP
-        umap_df = self._umap_embed(X_scaled, best_labels)
+        umap_df = self._umap_embed(X_fit_scaled, best_model.labels_)
 
         quality = "strong" if best_score > 0.5 else "moderate" if best_score > 0.3 else "weak"
         summary = (
