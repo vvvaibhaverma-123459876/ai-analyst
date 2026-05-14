@@ -190,7 +190,12 @@ class ForecastJuryAgent(BaseAgent):
         if len(context.ts) < 10:
             return self.skip(f"Only {len(context.ts)} points — need ≥10.")
 
-        jurors = [ProphetJuror(), ARIMAJuror(), ETSJuror()]
+        jurors = [ETSJuror()]
+        # Prophet/ARIMA are available for full local/prod forecasting but are
+        # opt-in for fast CI. ETS provides deterministic holdout validation.
+        import os
+        if os.getenv("AI_ANALYST_FULL_JURY", "0").lower() in {"1", "true", "yes"}:
+            jurors = [ProphetJuror(), ARIMAJuror(), ETSJuror()]
         foreman = Foreman("forecast", jurors)
         fv = foreman.deliberate(context)
         result = foreman.to_agent_result(self.name, fv)
@@ -201,6 +206,10 @@ class ForecastJuryAgent(BaseAgent):
                     "last_actual", "last_forecast", "horizon"]:
             if key not in result.data:
                 result.data[key] = pf.get(key)
+        if "forecast" not in result.data and result.data.get("forecast_df") is not None:
+            result.data["forecast"] = result.data.get("forecast_df")
+        if "periods" not in result.data and result.data.get("horizon") is not None:
+            result.data["periods"] = result.data.get("horizon")
 
         # Best MAPE across jurors
         mapes = [

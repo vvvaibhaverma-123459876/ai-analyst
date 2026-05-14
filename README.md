@@ -254,3 +254,24 @@ python -c "from versioning.release_gate import ReleaseChecklist; ReleaseChecklis
 
 `tests/test_bench_v10_gap_closure.py` — 21 tests proving all three gaps are
 closed. Each test maps directly to a structural property, not an LLM output.
+
+---
+
+## Gap-closure package notes
+
+This package includes a reliability-focused hardening pass documented in `docs/10_10_gap_closure.md`.
+
+Recommended local commands:
+
+```bash
+streamlit run app/ui/v06_app.py
+uvicorn api.main:app --reload
+pytest -q
+```
+
+Optional heavy/online capabilities are disabled by default for deterministic local runs:
+
+```bash
+AI_ANALYST_FULL_JURY=1
+AI_ANALYST_ENABLE_WEB_ENRICHMENT=1
+```

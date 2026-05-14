@@ -39,6 +39,13 @@ class DataQualityGate:
         completeness_ok = kpi_col in df.columns if kpi_col else True
         if kpi_col and not completeness_ok:
             blocking.append(f'missing KPI column: {kpi_col}')
+        if kpi_col and kpi_col in df.columns:
+            kpi_null_ratio = float(df[kpi_col].isna().mean())
+            if kpi_null_ratio > 0.20:
+                warnings.append(f'elevated KPI null ratio: {kpi_null_ratio:.1%}')
+            if kpi_null_ratio >= 0.80:
+                blocking.append('KPI null ratio too high')
+            completeness_ok = completeness_ok and kpi_null_ratio < 0.80
         freshness_ok = True
         continuity_ok = True
         if date_col and date_col in df.columns:
@@ -68,6 +75,8 @@ class DataQualityGate:
         score -= min(null_ratio, 0.8) * 0.35
         score -= 0.15 if not continuity_ok else 0.0
         score -= 0.15 if not sufficiency_ok else 0.0
+        if kpi_col and kpi_col in df.columns:
+            score -= min(float(df[kpi_col].isna().mean()), 0.9) * 0.55
         if blocking:
             score = min(score, 0.35)
         score = max(0.0, round(score, 3))

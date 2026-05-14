@@ -1,17 +1,21 @@
 {
   "run_id": "r1-replay",
-  "created_at": "2026-03-15T06:56:00.210485",
-  "metric_registry_version": "v7",
-  "policy_version": "v7",
-  "prompt_version": "v7",
-  "semantic_tables_version": "v7",
+  "created_at": "2026-05-14T13:35:26.112085",
+  "metric_registry_version": "v9",
+  "join_graph_version": "v9",
+  "policy_version": "v9",
+  "prompt_version": "v9",
+  "semantic_tables_version": "v9",
+  "config_version": "v9",
   "sources_used": [],
   "active_agents": [
     "insight"
   ],
-  "data_quality_score": 0.35,
-  "notes": [],
-  "replay_data_path": "/mnt/data/work_ai_v07_fix/ai_analyst_v07/memory/replay_data/r1-replay.csv",
+  "data_quality_score": 0.85,
+  "output_classification": "INTERNAL",
+  "guardian_summary": {},
+  "evidence_summary": {},
+  "replay_data_path": "/mnt/data/ai_analyst_work/ai-analyst-main/memory/replay_data/r1-replay.csv",
   "replay_context": {
     "date_col": "d",
     "kpi_col": "k",
@@ -19,5 +23,9 @@
     "filename": "run.csv",
     "tenant_id": "default",
     "user_id": "system"
-  }
+  },
+  "replay_type": "data_reloaded",
+  "notes": [],
+  "status": "ok",
+  "error": ""
 }

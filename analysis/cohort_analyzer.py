@@ -104,8 +104,13 @@ class CohortAnalyzer(AnalysisContract):
         Returns:
             pivot table: cohort_period (index) × period_number (columns) → retention %
         """
+        if df is None or df.empty or user_col not in df.columns or date_col not in df.columns:
+            return pd.DataFrame()
         df = df.copy()
-        df[date_col] = pd.to_datetime(df[date_col])
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col, user_col])
+        if df.empty:
+            return pd.DataFrame()
 
         df["cohort_period"] = df.groupby(user_col)[date_col].transform("min").dt.to_period(cohort_grain)
         df["activity_period"] = df[date_col].dt.to_period(cohort_grain)
@@ -142,8 +147,13 @@ class CohortAnalyzer(AnalysisContract):
         Returns:
             DataFrame with [user_col, signup_date, convert_date, days_to_convert]
         """
+        if df is None or df.empty:
+            return pd.DataFrame(columns=[user_col, "signup_date", "convert_date", "days_to_convert"])
         df = df.copy()
-        df[date_col] = pd.to_datetime(df[date_col])
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col])
+        if df.empty:
+            return pd.DataFrame(columns=[user_col, "signup_date", "convert_date", "days_to_convert"])
 
         signups = df[df[event_col] == signup_event].groupby(user_col)[date_col].min().rename("signup_date")
         converts = df[df[event_col] == convert_event].groupby(user_col)[date_col].min().rename("convert_date")
@@ -169,8 +179,13 @@ class CohortAnalyzer(AnalysisContract):
         Average KPI value per cohort at period D1, D7, D30 (or custom periods).
         """
         periods = periods or [1, 7, 30]
+        if df is None or df.empty or user_col not in df.columns or date_col not in df.columns or kpi_col not in df.columns:
+            return pd.DataFrame()
         df = df.copy()
-        df[date_col] = pd.to_datetime(df[date_col])
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col, user_col])
+        if df.empty:
+            return pd.DataFrame()
         df["cohort_date"] = df.groupby(user_col)[date_col].transform("min").dt.to_period(cohort_grain)
         df["activity_date"] = df[date_col].dt.to_period(cohort_grain)
         df["period_number"] = (df["activity_date"] - df["cohort_date"]).apply(lambda x: x.n)

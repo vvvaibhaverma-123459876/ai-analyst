@@ -8,6 +8,17 @@ import pandas as pd
 import numpy as np
 import pytest
 
+# Compatibility: legacy notebooks/tests sometimes use pd.date_range(start, periods)
+# as two positional args. Pandas treats the second positional as `end`, so normalize
+# an integer second arg to periods for stable local CI behavior.
+_orig_date_range = pd.date_range
+def _ai_analyst_date_range(start=None, end=None, periods=None, *args, **kwargs):
+    if isinstance(end, int) and periods is None:
+        periods = end
+        end = None
+    return _orig_date_range(start=start, end=end, periods=periods, *args, **kwargs)
+pd.date_range = _ai_analyst_date_range
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))

@@ -43,10 +43,10 @@ class RootCauseAnalyzer(AnalysisContract):
 
         try:
             result = self.driver_attribution(df, date_col, kpi_col, days)
-            drivers  = result["drivers"]
-            movers   = self.top_movers(drivers, n=5)
-            delta    = result["delta"]
-            pct      = result["pct_change"]
+            drivers  = result.get("drivers", pd.DataFrame())
+            movers   = result.get("movers") or self.top_movers(drivers, n=5)
+            delta    = result.get("delta", 0.0)
+            pct      = result.get("pct_change", 0.0)
             direction = "up" if delta >= 0 else "down"
             neg_drivers = movers.get("negative", [])
             top_neg = neg_drivers[0] if neg_drivers else {}
@@ -74,10 +74,10 @@ class RootCauseAnalyzer(AnalysisContract):
                     "movers":     movers,
                     "delta":      delta,
                     "pct_change": pct,
-                    "last_total": result["last_total"],
-                    "prev_total": result["prev_total"],
-                    "period_last": result["period_last"],
-                    "period_prev": result["period_prev"],
+                    "last_total": result.get("last_total", 0.0),
+                    "prev_total": result.get("prev_total", 0.0),
+                    "period_last": result.get("period_last"),
+                    "period_prev": result.get("period_prev"),
                 },
             )
         except Exception as e:
@@ -100,22 +100,31 @@ class RootCauseAnalyzer(AnalysisContract):
     ) -> dict:
         """
         Compare last N days vs previous N days across all categorical dimensions.
-        Extracted and extended from driver_attribution() in app.py v0.1.
 
-        Returns:
-            {
-                delta: float,
-                pct_change: float,
-                last_total: float,
-                prev_total: float,
-                drivers: pd.DataFrame,
-                period_last: (start, end),
-                period_prev: (start, end),
-            }
+        Returns both a detailed drivers DataFrame and a compact `movers` dict so
+        agents/tests/UI can use one stable contract.
         """
+        empty = {
+            "delta": 0.0,
+            "pct_change": 0.0,
+            "last_total": 0.0,
+            "prev_total": 0.0,
+            "drivers": pd.DataFrame(columns=["dimension", "value", "prev", "last", "delta", "pct_contribution"]),
+            "movers": {"positive": [], "negative": []},
+            "period_last": (None, None),
+            "period_prev": (None, None),
+        }
+        if df is None or df.empty or date_col not in df.columns or kpi_col not in df.columns:
+            return empty
+
         n = days or config.DEFAULT_DRIVER_DAYS
         dfx = df.copy()
-        dfx["__date__"] = pd.to_datetime(dfx[date_col].dt.date)
+        dfx["__date__"] = pd.to_datetime(dfx[date_col], errors="coerce")
+        dfx = dfx.dropna(subset=["__date__"])
+        dfx[kpi_col] = pd.to_numeric(dfx[kpi_col], errors="coerce").fillna(0)
+        if dfx.empty:
+            return empty
+        dfx["__date__"] = pd.to_datetime(dfx["__date__"].dt.date)
 
         max_date = dfx["__date__"].max()
         start_last = max_date - pd.Timedelta(days=n - 1)
@@ -124,32 +133,37 @@ class RootCauseAnalyzer(AnalysisContract):
         last = dfx[dfx["__date__"] >= start_last]
         prev = dfx[(dfx["__date__"] < start_last) & (dfx["__date__"] >= start_prev)]
 
-        last_total = last[kpi_col].sum()
-        prev_total = prev[kpi_col].sum()
-        delta = last_total - prev_total
-        pct = (delta / prev_total * 100) if prev_total != 0 else 0
+        last_total = float(last[kpi_col].sum())
+        prev_total = float(prev[kpi_col].sum())
+        delta = float(last_total - prev_total)
+        pct = float(delta / prev_total * 100) if prev_total != 0 else 0.0
 
-        cat_cols = [c for c in dfx.columns if dfx[c].dtype == "object"]
+        exclude = {date_col, kpi_col, "__date__"}
+        cat_cols = [
+            c for c in dfx.columns
+            if c not in exclude and (dfx[c].dtype == "object" or pd.api.types.is_categorical_dtype(dfx[c]) or dfx[c].nunique(dropna=True) <= 20)
+        ]
         results = []
         for c in cat_cols:
-            last_g = last.groupby(c)[kpi_col].sum()
-            prev_g = prev.groupby(c)[kpi_col].sum()
+            last_g = last.groupby(c, dropna=False)[kpi_col].sum()
+            prev_g = prev.groupby(c, dropna=False)[kpi_col].sum()
             merged = pd.concat([last_g, prev_g], axis=1).fillna(0)
             merged.columns = ["last", "prev"]
             merged["delta"] = merged["last"] - merged["prev"]
             merged["pct_contribution"] = (
-                (merged["delta"] / abs(delta) * 100).round(1) if delta != 0 else 0
+                (merged["delta"] / abs(delta) * 100).round(1) if delta != 0 else 0.0
             )
             merged["dimension"] = c
-            merged["value"] = merged.index
+            merged["value"] = merged.index.astype(str)
             merged = merged.reset_index(drop=True)[
                 ["dimension", "value", "prev", "last", "delta", "pct_contribution"]
             ]
             results.append(merged)
 
-        drivers = pd.concat(results).sort_values("delta") if results else pd.DataFrame()
+        drivers = pd.concat(results, ignore_index=True).sort_values("delta") if results else empty["drivers"].copy()
+        movers = self.top_movers(drivers, n=5)
 
-        logger.info(f"Driver attribution: delta={delta:+.2f} ({pct:+.1f}%), {len(drivers)} driver rows")
+        logger.info("Driver attribution: delta=%+.2f (%+.1f%%), %d driver rows", delta, pct, len(drivers))
 
         return {
             "delta": delta,
@@ -157,6 +171,7 @@ class RootCauseAnalyzer(AnalysisContract):
             "last_total": last_total,
             "prev_total": prev_total,
             "drivers": drivers,
+            "movers": movers,
             "period_last": (start_last.date(), max_date.date()),
             "period_prev": (start_prev.date(), (start_last - pd.Timedelta(days=1)).date()),
         }

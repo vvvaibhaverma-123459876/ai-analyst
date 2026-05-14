@@ -572,11 +572,12 @@ elif st.session_state.stage == "results":
                 h2.metric("Testable", testable_n)
 
             if f_agent and f_agent.data.get("data_gaps"):
+                gaps = f_agent.data.get("data_gaps", [])[:5]
+            if f_agent and f_agent.data.get("data_gaps"):
+                gaps = f_agent.data.get("data_gaps", [])[:5]
                 st.warning(
-                    "**Data gaps** — these columns/signals would unlock more hypotheses:
-"
-                    + "
-".join(f"- {g}" for g in f_agent.data["data_gaps"][:5])
+                    "**Data gaps** — these columns/signals would unlock more hypotheses:\n"
+                    + "\n".join(f"- {g}" for g in gaps)
                 )
 
             st.markdown("**Hypothesis verdicts**")

@@ -9,19 +9,25 @@ class OutputClassifier:
 
     _PII_PATTERNS = [
         re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'),
-        re.compile(r'\b\d{10}\b'),
+        re.compile(r'\b(?:\+?91[-\s]?)?[6-9]\d{9}\b'),
         re.compile(r'\b[A-Z]{5}\d{4}[A-Z]\b'),
         re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
     ]
+    _REDACTED_PATTERNS = [
+        re.compile(r'\[[A-Z_ ]*REDACTED[A-Z_ ]*\]', re.I),
+        re.compile(r'\[REDACTED\s+[^\]]+\]', re.I),
+        re.compile(r'\[[A-Z_ ]*MASKED[A-Z_ ]*\]', re.I),
+    ]
 
     def classify(self, payload: Any) -> str:
-        text = self._flatten(payload).lower()
-        if '[redacted' in text or 'masked' in text:
+        text_original = self._flatten(payload)
+        text = text_original.lower()
+        if any(p.search(text_original) for p in self._REDACTED_PATTERNS):
             return 'RESTRICTED'
-        if any(p.search(text) for p in self._PII_PATTERNS):
-            return 'CONFIDENTIAL'
         if any(word in text for word in ('policy block', 'tenant isolation', 'access denied')):
             return 'RESTRICTED'
+        if any(p.search(text_original) for p in self._PII_PATTERNS):
+            return 'CONFIDENTIAL'
         return 'INTERNAL'
 
     def _flatten(self, payload: Any) -> str:

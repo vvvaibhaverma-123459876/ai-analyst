@@ -108,6 +108,9 @@ class WebEnricher:
 
     def __init__(self):
         self._reliability = SourceReliabilityStore()
+        # Network enrichment is opt-in. This keeps local tests/runs fast and
+        # respects offline/private analytics by default.
+        self._enabled = os.getenv("AI_ANALYST_ENABLE_WEB_ENRICHMENT", "0").lower() in {"1", "true", "yes"}
 
     def enrich(
         self,
@@ -120,6 +123,8 @@ class WebEnricher:
         Main entry point. Triggered by specific findings.
         Returns EnrichmentContext with both confirming and opposing evidence.
         """
+        if not self._enabled:
+            return EnrichmentContext(summary="Skipped: web enrichment disabled. Set AI_ANALYST_ENABLE_WEB_ENRICHMENT=1 to enable.")
         if policy and not policy.check_internet_off() is None:
             logger.info("Internet-off mode: enrichment skipped.")
             return EnrichmentContext(summary="Skipped: internet-off mode active.")

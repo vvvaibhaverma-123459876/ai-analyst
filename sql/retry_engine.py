@@ -49,7 +49,7 @@ class SQLRetryEngine:
                     # Feed error back to LLM for correction
                     sql = self._retry_with_error(sql, str(last_error))
 
-                validated_sql = self._validator.validate(sql)
+                validated_sql = self._validator.sanitize(sql)
                 logger.info(f"SQL validated on attempt {attempt}.")
                 return validated_sql
 

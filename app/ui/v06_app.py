@@ -440,13 +440,17 @@ with tab_analysis:
             st.markdown(f'<div class="{css}">{msg["content"]}</div>', unsafe_allow_html=True)
         user_q = st.text_input("Ask a follow-up…", key="follow_up_input")
         if user_q and st.button("Send"):
-            st.session_state["chat_history"].append({"role":"user","content":user_q})
+            st.session_state["chat_history"].append({"role": "user", "content": user_q})
             try:
-                engine = ConversationEngine()
-                answer = engine.answer(user_q, ctx)
-            except Exception:
-                answer = "Follow-up engine unavailable."
-            st.session_state["chat_history"].append({"role":"assistant","content":answer})
+                run_id = getattr(ctx, "run_id", "current")
+                if st.session_state.get("conversation_engine_run_id") != run_id:
+                    st.session_state["conversation_engine"] = ConversationEngine(ctx)
+                    st.session_state["conversation_engine_run_id"] = run_id
+                engine = st.session_state["conversation_engine"]
+                answer = engine.chat(user_q)
+            except Exception as e:
+                answer = f"Follow-up engine unavailable: {e}"
+            st.session_state["chat_history"].append({"role": "assistant", "content": answer})
             st.rerun()
 
 # ────────────────────────────────────────────────────────────────────

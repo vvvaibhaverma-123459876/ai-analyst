@@ -37,10 +37,18 @@ class ForemanVerdict:
 
 class Foreman:
 
-    def __init__(self, jury_name: str, jurors: list[BaseJuror], max_workers: int = 4):
+    def __init__(self, jury_name: str = "jury", jurors: list[BaseJuror] | None = None, max_workers: int = 4):
         self._jury_name = jury_name
-        self._jurors = jurors
+        self._jurors = jurors or []
         self._max_workers = max_workers
+
+    def reconcile(
+        self,
+        verdicts: list[JurorVerdict],
+        agreement_fn: Callable[[list[JurorVerdict]], bool] = None,
+    ) -> ForemanVerdict:
+        """Reconcile precomputed verdicts; useful for tests and offline audits."""
+        return self._reconcile(verdicts, agreement_fn)
 
     def deliberate(
         self,
@@ -52,7 +60,14 @@ class Foreman:
         agreement_fn: optional custom function to determine if two verdicts agree.
         """
         verdicts = self._run_jurors(context)
-        successful = [v for v in verdicts if v.status == "success"]
+        return self._reconcile(verdicts, agreement_fn)
+
+    def _reconcile(
+        self,
+        verdicts: list[JurorVerdict],
+        agreement_fn: Callable[[list[JurorVerdict]], bool] = None,
+    ) -> ForemanVerdict:
+        successful = [v for v in verdicts if v.status in ("success", "found", "clean")]
 
         if not successful:
             return ForemanVerdict(

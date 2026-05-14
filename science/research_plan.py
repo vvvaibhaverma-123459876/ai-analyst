@@ -67,6 +67,12 @@ class ResearchPlan:
     # ------------------------------------------------------------------
 
     def add_hypothesis(self, h: Hypothesis):
+        # Keep boolean testable and enum status in sync for callers that set
+        # only one of the two fields.
+        if h.testable is True and h.status == HypothesisStatus.PENDING:
+            h.status = HypothesisStatus.TESTABLE
+        elif h.testable is False and h.status == HypothesisStatus.PENDING:
+            h.status = HypothesisStatus.NOT_TESTABLE
         # Penalise novelty for near-duplicate statements
         existing = [x.statement.lower() for x in self.hypotheses]
         if any(self._similarity(h.statement.lower(), e) > 0.7 for e in existing):
@@ -74,7 +80,10 @@ class ResearchPlan:
         self.hypotheses.append(h)
 
     def testable_hypotheses(self) -> list[Hypothesis]:
-        return [h for h in self.hypotheses if h.status == HypothesisStatus.TESTABLE]
+        return [
+            h for h in self.hypotheses
+            if h.status == HypothesisStatus.TESTABLE or (h.testable is True and h.status == HypothesisStatus.PENDING)
+        ]
 
     def add_evidence(self, hypothesis_id: str, evidence: dict):
         for h in self.hypotheses:
@@ -120,9 +129,23 @@ class ResearchPlan:
 
     @staticmethod
     def _similarity(a: str, b: str) -> float:
-        """Simple word-overlap similarity."""
-        words_a = set(a.split())
-        words_b = set(b.split())
+        """Token similarity with tiny synonym normalisation for duplicate hypotheses."""
+        synonyms = {
+            "because": "due", "of": "", "problems": "issues", "problem": "issues",
+            "issue": "issues", "caused": "due", "causes": "due", "cause": "due",
+        }
+        def norm(text: str) -> set[str]:
+            import re
+            toks = []
+            for t in re.findall(r"[a-z0-9]+", text.lower()):
+                mapped = synonyms.get(t, t)
+                if mapped and mapped not in {"the", "a", "an"}:
+                    toks.append(mapped)
+            return set(toks)
+        words_a = norm(a)
+        words_b = norm(b)
         if not words_a or not words_b:
             return 0.0
-        return len(words_a & words_b) / len(words_a | words_b)
+        jaccard = len(words_a & words_b) / len(words_a | words_b)
+        overlap = len(words_a & words_b) / min(len(words_a), len(words_b))
+        return max(jaccard, overlap)

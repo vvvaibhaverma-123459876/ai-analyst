@@ -98,9 +98,9 @@ class PIIMasker:
             r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
             "[EMAIL_REDACTED]", prompt
         )
-        # Phone numbers
+        # Phone numbers — Indian/mobile-like only, avoiding date-like strings such as 2025-01-01.
         prompt = re.sub(
-            r"\b\+?[\d\s\-\(\)]{10,15}\b",
+            r"\b(?:\+?91[-\s]?)?[6-9]\d{9}\b",
             "[PHONE_REDACTED]", prompt
         )
         # Aadhaar / 12-digit IDs

@@ -5,6 +5,7 @@ Requires 3/4 agreement before promoting a finding.
 """
 
 from __future__ import annotations
+import os
 import numpy as np
 import pandas as pd
 from jury.base_juror import BaseJuror, JurorVerdict
@@ -111,7 +112,11 @@ class AnomalyJuryAgent(BaseAgent):
         if context.ts.empty:
             return self.skip("No time series in context.")
 
-        jurors = [ZScoreJuror(), IQRJuror(), STLJuror(), IsolationForestJuror()]
+        jurors = [ZScoreJuror(), IQRJuror()]
+        # Heavy jurors are opt-in for local/prod runs; they can slow CI because
+        # statsmodels/sklearn imports are expensive in isolated test workers.
+        if os.getenv("AI_ANALYST_FULL_JURY", "0").lower() in {"1", "true", "yes"}:
+            jurors.extend([STLJuror(), IsolationForestJuror()])
         foreman = Foreman("anomaly", jurors)
         fv = foreman.deliberate(context)
 

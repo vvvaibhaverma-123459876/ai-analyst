@@ -278,9 +278,8 @@ class GovernedPipeline:
             kpi = context.kpi_col or context.business_context.get("metric", "")
             if kpi:
                 resolved_grain = resolver.resolve(kpi, context.grain)
-                # GrainResolver returns lowercase; normalise to title-case for display
-                display = resolved_grain.title()
-                if context.grain.lower() != resolved_grain.lower():
+                display = str(resolved_grain)
+                if str(context.grain).lower() != display.lower():
                     context.run_manifest.setdefault("notes", []).append(
                         f"Grain coerced: '{context.grain}' → '{display}' "
                         f"(governed by metric '{kpi}')"

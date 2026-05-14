@@ -57,8 +57,12 @@ class RecommendationRanker:
             evidence_quality= float(action.get("evidence_quality",1.0))
             reversibility   = float(action.get("reversibility",   0.5))
 
-            raw   = 0.35 * confidence + 0.30 * urgency + 0.30 * business_value - 0.15 * effort
-            adj   = raw * max(0.0, min(1.0, evidence_quality))
+            # Confidence is deliberately the strongest term. A low-confidence,
+            # high-urgency action should not outrank a safer investigation.
+            raw   = 0.75 * confidence + 0.12 * urgency + 0.10 * business_value - 0.12 * effort
+            # Penalise irreversible/low-evidence actions unless evidence quality is explicitly high.
+            evidence_factor = max(0.0, min(1.0, evidence_quality))
+            adj   = raw * evidence_factor
             score = round(max(0.0, min(1.0, adj)), 4)
 
             ranked.append(RankedRecommendation(

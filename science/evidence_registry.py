@@ -53,7 +53,7 @@ class EvidenceRegistry:
         neutral = [r for r in records if r.supports is None]
         total = support + oppose
         if total == 0:
-            state = EvidenceState.INCONCLUSIVE if records or neutral else EvidenceState.UNTESTABLE
+            state = EvidenceState.INCONCLUSIVE
             return EvidenceSummary(
                 state=state,
                 support_weight=support,
