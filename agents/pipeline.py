@@ -141,6 +141,14 @@ class GovernedPipeline:
         dq = DataQualityGate().assess(context.df, context.date_col, context.kpi_col)
         context.data_quality_report = dq.to_dict()
         context.run_manifest["data_quality_score"] = dq.score
+        if dq.fatal_reasons:
+            # A fatal setup error (e.g. the chosen date column isn't a date
+            # at all) is not a quality gradient — every downstream agent
+            # would be operating on garbage. Actually halt here instead of
+            # the usual "log and continue with downgraded confidence".
+            from core.exceptions import DataQualityError
+            logger.error("DQ gate fatal: %s", dq.fatal_reasons)
+            raise DataQualityError("; ".join(dq.fatal_reasons))
         if not dq.ok:
             logger.warning("DQ gate blocked: %s", dq.blocking_reasons)
             # Still continue — downstream modules auto-downgrade confidence
