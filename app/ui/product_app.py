@@ -420,16 +420,36 @@ def render_agent_grid(started: list[str], results: dict[str, Any]) -> str:
 # -----------------------------------------------------------------------------
 
 
-def render_hero() -> None:
+def mode_badge_html() -> str:
+    """The hero mode chip(s) as raw HTML. Explicit about what's actually
+    active — no passive/ambiguous badge — so mode confusion (e.g. a real
+    .env with ANALYST_MODE=full silently not taking effect) is visible
+    immediately instead of only discoverable by reading logs or source.
+    Pulled out of render_hero() so it's unit-testable without a Streamlit
+    runtime."""
     if config.ANALYST_MODE == "full":
-        mode_chip = '<span class="pill" style="background:#052e1a;color:#4ade80;border-color:#166534;">● Full mode — live LLM calls enabled</span>'
-    else:
-        mode_chip = (
-            '<span class="pill" style="background:#1e1b4b;color:#c4b5fd;border-color:#4c1d95;" '
-            'title="No API keys, no outbound network calls. Rule-based/deterministic analysis only. '
-            'Set ANALYST_MODE=full and configure an LLM key to unlock live generation.">'
-            "◇ Offline demo mode — no LLM calls, no API keys required</span>"
+        return (
+            '<span class="pill" style="background:#052e1a;color:#4ade80;border-color:#166534;">'
+            f"● Full mode — provider: {config.LLM_PROVIDER}, model: {config.LLM_MODEL}</span>"
         )
+    chip = (
+        '<span class="pill" style="background:#1e1b4b;color:#c4b5fd;border-color:#4c1d95;" '
+        'title="No API keys, no outbound network calls. Rule-based/deterministic analysis only. '
+        'Set ANALYST_MODE=full and configure an LLM key to unlock live generation.">'
+        "◇ Offline demo mode — no LLM calls, no API keys required</span>"
+    )
+    detected = config.key_detected_but_offline
+    if detected:
+        env_var = "OPENAI_API_KEY" if detected == "openai" else "ANTHROPIC_API_KEY"
+        chip += (
+            ' <span class="pill" style="background:#451a03;color:#fbbf24;border-color:#92400e;">'
+            f"⚠ {env_var} detected but ANALYST_MODE=offline — set ANALYST_MODE=full to use it.</span>"
+        )
+    return chip
+
+
+def render_hero() -> None:
+    mode_chip = mode_badge_html()
     st.markdown(
         f"""
         <div class="hero">
