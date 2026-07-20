@@ -25,6 +25,7 @@ pytest-xdist>=3.5.0         # parallel -n auto
 fastapi>=0.110.0
 python-jose[cryptography]>=3.3.0
 python-dotenv>=1.0.0
+python-multipart>=0.0.9     # required by FastAPI form-data routes (api/main.py)
 
 # ── Data connectors (lightweight only) ───────────────────
 sqlalchemy>=2.0.0
