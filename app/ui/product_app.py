@@ -179,7 +179,6 @@ def inject_css() -> None:
             padding: 20px 22px;
             font-size: .96rem;
             line-height: 1.62;
-            white-space: pre-wrap;
         }
         .mini-table {
             border: 1px solid rgba(255,255,255,.12);
@@ -655,7 +654,18 @@ def render_results(context: AnalysisContext) -> None:
 
     with overview:
         st.markdown("### Executive brief")
-        st.markdown(f"<div class='brief'>{context.final_brief or 'No final brief generated.'}</div>", unsafe_allow_html=True)
+        # final_brief is markdown (## headings, - bullets — see
+        # InsightAgent._rule_brief / _llm_brief). Interpolating it inside a
+        # literal <div>...</div> and rendering the whole string through one
+        # st.markdown(..., unsafe_allow_html=True) call left it as raw HTML
+        # content: markdown syntax is not reprocessed inside an HTML block,
+        # so "## What happened" showed up as literal text instead of a
+        # heading. Emitting the wrapper tags and the brief content as
+        # separate st.markdown() calls keeps the .brief card styling while
+        # letting the brief's own call render as real markdown.
+        st.markdown("<div class='brief'>", unsafe_allow_html=True)
+        st.markdown(context.final_brief or "No final brief generated.")
+        st.markdown("</div>", unsafe_allow_html=True)
         if context.follow_up_questions:
             st.markdown("### Suggested next questions")
             for q in context.follow_up_questions[:5]:
