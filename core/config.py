@@ -8,10 +8,18 @@ import yaml
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIGS_DIR = BASE_DIR / "configs"
+
+# Load .env from the repo root explicitly, rather than relying on
+# python-dotenv's implicit frame-walking discovery (find_dotenv() resolves
+# relative to whatever frame happens to call it, which is fragile under
+# Streamlit's script-execution model and easy to get wrong silently — the
+# .env would just never load, with no error, and the app falls back to
+# offline mode without any indication why). override=False: real
+# already-set environment variables (e.g. a platform's own env/secrets)
+# always win over .env file values.
+load_dotenv(BASE_DIR / ".env", override=False)
 
 
 def _load_yaml(filename: str) -> dict:
@@ -39,8 +47,13 @@ class Config:
 
     # LLM provider — switchable later: "openai" | "anthropic" | "gemini"
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "") if ANALYST_MODE == "full" else ""
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "") if ANALYST_MODE == "full" else ""
+    # Raw env values, kept regardless of mode so the UI can tell a visitor
+    # "a key IS configured but offline mode is ignoring it" instead of
+    # silently looking identical to "no key configured at all".
+    _RAW_OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    _RAW_ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY: str = _RAW_OPENAI_API_KEY if ANALYST_MODE == "full" else ""
+    ANTHROPIC_API_KEY: str = _RAW_ANTHROPIC_API_KEY if ANALYST_MODE == "full" else ""
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
 
@@ -60,6 +73,19 @@ class Config:
     TABLES: dict = _load_yaml("tables.yaml")
     JOINS: dict = _load_yaml("joins.yaml")
     GLOSSARY: dict = _load_yaml("business_glossary.yaml")
+
+    @property
+    def key_detected_but_offline(self) -> str | None:
+        """The provider name if a key was found in the raw environment but
+        ANALYST_MODE isn't "full" (so it's being ignored) — None otherwise.
+        UI-hint only; never affects which provider actually runs."""
+        if self.ANALYST_MODE == "full":
+            return None
+        if self._RAW_OPENAI_API_KEY:
+            return "openai"
+        if self._RAW_ANTHROPIC_API_KEY:
+            return "anthropic"
+        return None
 
 
 config = Config()

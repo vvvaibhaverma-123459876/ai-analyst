@@ -67,7 +67,15 @@ jobs:
           print(f'OK: product_app imports cleanly, demo dataset preloads {df.shape[0]} rows')
           "
 
-      - name: Offline-mode pipeline + zero-network-call test
+      - name: Full test suite under the streamlit-enabled demo environment
         env:
           ANALYST_MODE: offline
-        run: pytest tests/test_offline_mode.py -v
+          AI_ANALYST_FULL_JURY: '0'
+          AI_ANALYST_ENABLE_WEB_ENRICHMENT: '0'
+        # The `test` job's requirements-ci.txt has no streamlit, so every
+        # UI-dependent test (column inference, brief rendering, the full
+        # demo-run-quality gate) is skipped there via pytest.importorskip —
+        # this is the only CI job that actually executes them. Required,
+        # not advisory: this is the regression gate for the recorded demo
+        # failure mode (bugs 1-6) and must block merge like the `test` job.
+        run: pytest -q

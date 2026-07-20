@@ -10,7 +10,8 @@ import pandas as pd
 from agents.base_agent import BaseAgent
 from agents.context import AnalysisContext, AgentResult
 from analysis.statistics import (
-    resample_timeseries, period_comparison, add_trend_line, rolling_stats
+    resample_timeseries, period_comparison, add_trend_line, rolling_stats,
+    safe_pct_change, format_pct_change,
 )
 from core.config import config
 from semantic.grain_resolver import GrainResolver
@@ -67,10 +68,15 @@ class TrendAgent(BaseAgent):
         if len(ts) >= 2:
             first_val = ts[kpi_col].iloc[0]
             last_val = ts[kpi_col].iloc[-1]
-            trend_pct = ((last_val - first_val) / first_val * 100) if first_val != 0 else 0
-            direction = "upward" if trend_pct > 2 else ("downward" if trend_pct < -2 else "flat")
+            trend_pct = safe_pct_change(last_val - first_val, first_val)
+            if trend_pct is None:
+                # No baseline to express a % against (started at zero) —
+                # direction is still meaningful from the raw delta sign.
+                direction = "upward" if last_val > first_val else ("downward" if last_val < first_val else "flat")
+            else:
+                direction = "upward" if trend_pct > 2 else ("downward" if trend_pct < -2 else "flat")
         else:
-            trend_pct = 0
+            trend_pct = 0.0
             direction = "insufficient data"
 
         # Seasonality check (basic: std of weekly means)
@@ -87,10 +93,10 @@ class TrendAgent(BaseAgent):
             pass
 
         summary_parts = [
-            f"KPI '{kpi_col}' shows a {direction} trend ({trend_pct:+.1f}% overall) at {resolved_grain} grain."
+            f"KPI '{kpi_col}' shows a {direction} trend ({format_pct_change(trend_pct)} overall) at {resolved_grain} grain."
         ]
         for comp_name, comp in comparisons.items():
-            summary_parts.append(f"{comp_name}: {comp['pct_change']:+.1f}%")
+            summary_parts.append(f"{comp_name}: {comp.get('pct_change_display', format_pct_change(comp.get('pct_change')))}")
         if seasonality_note:
             summary_parts.append(seasonality_note)
 
@@ -104,7 +110,8 @@ class TrendAgent(BaseAgent):
                 "ts": ts,
                 "comparisons": comparisons,
                 "trend_direction": direction,
-                "trend_pct": round(trend_pct, 2),
+                "trend_pct": round(trend_pct, 2) if trend_pct is not None else None,
+                "trend_pct_display": format_pct_change(trend_pct),
                 "seasonality_note": seasonality_note,
                 "resolved_grain": resolved_grain,
                 "latest_value": round(ts[kpi_col].iloc[-1], 2) if not ts.empty else None,

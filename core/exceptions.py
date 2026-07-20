@@ -30,3 +30,11 @@ class MetadataError(AIAnalystError):
 
 class AnalysisError(AIAnalystError):
     """Raised when an analysis step fails."""
+
+
+class DataQualityError(AIAnalystError):
+    """Raised when the DataQualityGate finds a fatal (not just low-score)
+    setup problem — e.g. the chosen date column isn't actually a date — that
+    would make every downstream result meaningless if the pipeline proceeded
+    anyway. Distinct from the gate's regular blocking_reasons, which lower
+    confidence but don't halt the run."""

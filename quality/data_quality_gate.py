@@ -1,6 +1,24 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 import pandas as pd
+
+_UNIX_EPOCH = pd.Timestamp("1970-01-01")
+
+
+def _is_degenerate_epoch_parse(parsed: pd.Series, row_count: int) -> bool:
+    """True if parsed datetimes are the unmistakable signature of raw
+    numbers being reinterpreted as nanoseconds/seconds/etc since the Unix
+    epoch by pd.to_datetime, rather than real per-row dates — not "sparse"
+    or "low quality" dates, but not dates at all. Two independent tells:
+    every parsed value landing within a minute of 1970-01-01, or a single
+    unique timestamp across a multi-thousand-row frame (a constant/near-
+    constant numeric column, e.g. a count or flag, parsed as "a date")."""
+    if (parsed.max() - _UNIX_EPOCH) < pd.Timedelta(seconds=60) and (parsed.min() - _UNIX_EPOCH) > pd.Timedelta(seconds=-60):
+        return True
+    if row_count >= 1000 and parsed.nunique() <= 1:
+        return True
+    return False
+
 
 @dataclass
 class DataQualityReport:
@@ -15,6 +33,11 @@ class DataQualityReport:
     row_count: int
     warnings: list[str]
     blocking_reasons: list[str]
+    # Distinct from blocking_reasons: a fatal setup error (the date column
+    # isn't a date at all) rather than a quality gradient. GovernedPipeline
+    # raises DataQualityError and halts when this is non-empty, instead of
+    # the usual "log a warning, continue with downgraded confidence".
+    fatal_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -23,9 +46,10 @@ class DataQualityGate:
     def assess(self, df: pd.DataFrame, date_col: str = '', kpi_col: str = '') -> DataQualityReport:
         warnings: list[str] = []
         blocking: list[str] = []
+        fatal: list[str] = []
         row_count = len(df)
         if row_count == 0:
-            return DataQualityReport(False, 0.0, False, False, False, False, 0.0, 1.0, 0, ['empty dataframe'], ['empty dataframe'])
+            return DataQualityReport(False, 0.0, False, False, False, False, 0.0, 1.0, 0, ['empty dataframe'], ['empty dataframe'], [])
         duplicate_ratio = float(df.duplicated().mean()) if row_count else 0.0
         if duplicate_ratio > 0.25:
             warnings.append(f'high duplicate ratio: {duplicate_ratio:.1%}')
@@ -49,11 +73,24 @@ class DataQualityGate:
         freshness_ok = True
         continuity_ok = True
         if date_col and date_col in df.columns:
-            dt = pd.to_datetime(df[date_col], errors='coerce').dropna().sort_values()
+            raw_col = df[date_col]
+            is_numeric_source = pd.api.types.is_numeric_dtype(raw_col)
+            dt = pd.to_datetime(raw_col, errors='coerce').dropna().sort_values()
             if dt.empty:
                 freshness_ok = False
                 continuity_ok = False
                 blocking.append('date parsing failed')
+            elif is_numeric_source and _is_degenerate_epoch_parse(dt, row_count):
+                freshness_ok = False
+                continuity_ok = False
+                message = (
+                    f"'{date_col}' is not a date column — it is numeric, and parsing it as "
+                    f"a date collapses to {dt.nunique()} unique timestamp(s) between "
+                    f"{dt.min()} and {dt.max()} across {row_count} rows. Choose an actual "
+                    "date/time column."
+                )
+                blocking.append(message)
+                fatal.append(message)
             else:
                 span_days = max((dt.max() - dt.min()).days, 0)
                 if len(dt) >= 3 and span_days > 0:
@@ -81,4 +118,4 @@ class DataQualityGate:
             score = min(score, 0.35)
         score = max(0.0, round(score, 3))
         ok = not blocking
-        return DataQualityReport(ok, score, freshness_ok, completeness_ok, continuity_ok, sufficiency_ok, round(duplicate_ratio, 4), round(null_ratio, 4), row_count, warnings, blocking)
+        return DataQualityReport(ok, score, freshness_ok, completeness_ok, continuity_ok, sufficiency_ok, round(duplicate_ratio, 4), round(null_ratio, 4), row_count, warnings, blocking, fatal)
