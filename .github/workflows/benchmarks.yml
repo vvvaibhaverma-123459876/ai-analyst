@@ -102,8 +102,7 @@ jobs:
                  tests/test_semantic_and_science.py \
                  tests/test_semantic_wiring.py \
                  tests/test_v07_governance.py \
-            -n auto --cov=. --cov-report=xml \
-            --cov-omit="app/*,tests/*" -q
+            -n auto --cov=. --cov-report=xml --cov-config=.coveragerc -q
       - uses: codecov/codecov-action@v4
         if: matrix.python-version == '3.11'
         with: { file: coverage.xml, flags: unit, fail_ci_if_error: false }

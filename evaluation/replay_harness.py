@@ -27,8 +27,9 @@ class ReplayHarness:
         from agents.runner import AgentRunner
         from security.security_shell import SecurityShell
 
-        df = pd.read_csv(path)
         rc = manifest.get('replay_context', {})
+        date_col = rc.get('date_col')
+        df = pd.read_csv(path, parse_dates=[date_col] if date_col else None)
         shell = SecurityShell(tenant_id=rc.get('tenant_id', 'default'), user_id=rc.get('user_id', 'system'), role=rc.get('role'))
         safe_df, _ = shell.process_dataframe(df, run_id=run_id)
         context = AnalysisContext(

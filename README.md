@@ -1,15 +1,115 @@
-# AI Analyst Command Center — Production UI Pass
+# AI Analyst — a governed multi-agent analytics platform
 
-This repo now includes a modern product-style UI designed to show the true capability of the AI Analyst platform.
+Upload a dataset, and instead of a chatbot guessing at your data, a **governed
+pipeline** runs it through data-quality gates, a semantic metric layer, an
+anomaly jury, root-cause and forecast agents, an adversarial debate step, and
+a guardian review — before publishing a business-ready brief with cited
+evidence. It's built to be explainable and audited, not just fast.
 
-## Recommended commands
+[![CI](https://github.com/vvvaibhaverma-123459876/ai-analyst/actions/workflows/ci.yml/badge.svg)](https://github.com/vvvaibhaverma-123459876/ai-analyst/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11-3776ab)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-ff4b4b)
+![FastAPI](https://img.shields.io/badge/API-FastAPI-009688)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+### 🚀 Live demo (offline mode)
+
+> **Set this once the Streamlit Cloud app exists:** replace this line with
+> `**[Live demo](https://<your-app>.streamlit.app)**` — see
+> [docs/deployment.md](docs/deployment.md) for the one-time setup; the URL
+> isn't known until then, so it can't be hardcoded in advance.
+
+The public demo runs `ANALYST_MODE=offline` (the default) — **zero API keys,
+zero outbound network calls**, deterministic/rule-based analysis in place of
+LLM calls, verified by a test that patches `socket.socket.connect` to raise
+(`tests/test_offline_mode.py`). It preloads a fintech onboarding dataset so
+the dashboard is never empty. See the capabilities table below for exactly
+what's canned vs. what runs live.
+
+## Architecture: the governed pipeline
+
+```mermaid
+flowchart TB
+    A[Upload / demo dataset] --> B[SecurityShell: PII mask, tenant check]
+    B --> C[EDA agent]
+    C --> D{DataQualityGate<br/>hard gate}
+    D --> E[Semantic resolution<br/>metric / grain / joins]
+    E --> F[Orchestrator: plan active agents]
+    F --> G[Hypothesis + Feasibility]
+    G --> H[Trend agent]
+    H --> I[Parallel: anomaly jury, root cause,<br/>funnel, cohort, forecast jury, ml cluster]
+    I --> J[Debate: adversarial challenge]
+    J --> K[Guardian: contradiction + evidence grade]
+    K --> L[ConclusionEngine + InsightAgent]
+    L --> M[SecurityShell.publish_output<br/>MANDATORY — no agent emits directly]
+    M --> N[Learning observations + RunManifest]
+
+    style D fill:#7c3aed,color:#fff
+    style M fill:#7c3aed,color:#fff
+```
+
+Every one of the ~15 analytical agents that touches an LLM already guards on
+`config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY` and falls back to a
+deterministic path when they're blank — which `ANALYST_MODE=offline` forces
+unconditionally, regardless of what's actually in the environment
+(`core/config.py`).
+
+## Capabilities: offline demo vs. full mode
+
+| Capability | Offline demo (public link) | Full mode (local, LLM-backed) |
+|---|---|---|
+| Governed pipeline (all 10 phases, all agents) | ✅ runs completely | ✅ |
+| Data quality gate, semantic layer, guardian review | ✅ | ✅ |
+| Anomaly detection (z-score, IQR) | ✅ | ✅ + STL/Isolation Forest (`AI_ANALYST_FULL_JURY=1`) |
+| Forecasting (ETS) | ✅ | ✅ + Prophet/ARIMA (`AI_ANALYST_FULL_JURY=1`) |
+| Hypothesis generation, executive brief, chat | ✅ rule-based, honestly labeled as such | ✅ LLM-generated |
+| Web enrichment for anomaly context | ❌ off by default everywhere (`AI_ANALYST_ENABLE_WEB_ENRICHMENT=0`) | opt-in |
+| Requires an API key | **No** | Yes — `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` |
+| Outbound network calls | **Zero** (test-enforced) | Yes, to the configured LLM provider |
+
+Offline mode never presents a canned output *as if* it were a live LLM
+response — the UI's mode chip and every rule-based summary are explicit about
+their source.
+
+## Screenshot
+
+<!--
+  Drop a short screen recording here before sharing this repo externally.
+  Suggested capture: load the fintech demo (already preloaded), click "Run
+  governed analysis", then click through Deep dive and Ask follow-up.
+  Save it as assets/demo.gif (create the assets/ folder) and it will render
+  below.
+-->
+<!-- ![AI Analyst demo](assets/demo.gif) -->
+
+## 60-second demo script
+
+*(Distilled from [docs/demo_script.md](docs/demo_script.md), which has the
+full 7-minute version.)*
+
+1. Open the live demo — the fintech onboarding dataset is already loaded, and
+   the hero chip confirms **offline demo mode**.
+2. Click **Run governed analysis**. Point at the live agent console as EDA,
+   hypothesis, trend, anomaly, root cause, funnel, cohort, forecast, debate,
+   guardian, and insight run in sequence/parallel.
+3. Show the **Executive brief** — generated from structured agent findings,
+   published only through the security/output boundary.
+4. Open **Deep dive** for the KPI trend, anomaly markers, driver attribution,
+   funnel, cohort, and forecast charts.
+5. Use **Ask follow-up** — ask "What drove the drop?" and point out the
+   answer is grounded in the completed analysis context, not a free-floating
+   chat.
+6. **Export** to Markdown or JSON — mention the JSON carries run metadata for
+   audit/replay.
+
+## Local development
 
 ```bash
 # install lean test/dev dependencies
 pip install -r requirements-ci.txt
 pip install streamlit plotly python-multipart uvicorn
 
-# run the modern app UI
+# run the product UI (offline mode by default)
 streamlit run app/ui/product_app.py
 
 # backwards-compatible canonical UI command
@@ -23,20 +123,40 @@ python -m compileall .
 pytest -q
 ```
 
-## What the production UI adds
+## Run with real LLM access (full mode)
 
-- Guided app workflow: connect data → validate schema → run governed analysis → act.
-- Modern command-center interface with app-like dark visual design.
-- Real capability visibility: semantic layer, security shell, anomaly jury, root cause, forecast, guardian, memory/audit/export.
-- Fintech onboarding demo dataset aligned with card/funnel analytics.
-- Deep-dive tabs for trend, anomaly, root cause, funnel, cohort, forecast, agents, grounded chat, and export.
-- Backwards compatibility: `app/ui/v06_app.py` delegates to the product UI.
+```bash
+pip install -r requirements.txt   # everything, incl. prophet/chromadb/etc.
+export ANALYST_MODE=full
+export OPENAI_API_KEY=sk-...      # or ANTHROPIC_API_KEY
+streamlit run app/ui/product_app.py
+```
 
-See:
+Full mode is not what the public deploy runs — see the capabilities table
+above.
+
+## Deployment
+
+Streamlit Community Cloud auto-redeploys `main` — see
+[docs/deployment.md](docs/deployment.md) for the one-time setup
+(`requirements-demo.txt`, `ANALYST_MODE=offline`). Docker/Render/Railway are
+also supported for a self-hosted container. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the PR workflow — CI must be green
+before merge.
+
+## More docs
 
 - `docs/ui_product_strategy.md`
 - `docs/production_readiness.md`
-- `docs/demo_script.md`
+- `docs/demo_script.md` (full 7-minute version)
+- `docs/deployment.md`
+
+---
+
+## Engineering changelog
+
+<details>
+<summary>v9 → v10 architecture notes (click to expand)</summary>
 
 ---
 
@@ -317,3 +437,5 @@ Optional heavy/online capabilities are disabled by default for deterministic loc
 AI_ANALYST_FULL_JURY=1
 AI_ANALYST_ENABLE_WEB_ENRICHMENT=1
 ```
+
+</details>
