@@ -123,6 +123,7 @@ class AnalysisContext:
             kpi_col=self.kpi_col,
             grain=self.grain,
             filename=self.filename,
+            document=self.document,
             business_context=dict(self.business_context),
             data_profile=dict(self.data_profile),
             active_agents=list(self.active_agents),
@@ -157,6 +158,7 @@ class ContextSnapshot:
     kpi_col:             str = ""
     grain:               str = "Daily"
     filename:            str = ""
+    document:            Any = None
     business_context:    dict = field(default_factory=dict)
     data_profile:        dict = field(default_factory=dict)
     active_agents:       list = field(default_factory=list)

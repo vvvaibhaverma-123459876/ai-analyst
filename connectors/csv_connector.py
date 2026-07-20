@@ -91,15 +91,29 @@ class CSVConnector(BaseConnector):
 
     @staticmethod
     def detect_datetime_column(df: pd.DataFrame) -> str | None:
-        # First pass: already datetime dtype
+        # First pass: already datetime dtype. np.issubdtype(df[c].dtype, ...)
+        # crashes ("Cannot interpret '<StringDtype(...)>' as a data type")
+        # on pandas' string-backend dtype (the CSV-read default since
+        # pandas 3.0) — pd.api.types.is_datetime64_any_dtype() is the
+        # version-safe pandas-native check.
         for c in df.columns:
-            if np.issubdtype(df[c].dtype, np.datetime64):
+            if pd.api.types.is_datetime64_any_dtype(df[c]):
                 return c
-        # Second pass: object columns that parse well
+        # Second pass: string columns that parse well as dates. Checking
+        # `df[c].dtype == "object"` alone misses pandas' newer StringDtype
+        # columns entirely (dtype prints as "str", not "object", so every
+        # string column would be silently skipped) — is_string_dtype()
+        # covers both. Never a numeric column: pd.to_datetime silently
+        # reinterprets raw numbers as nanoseconds-since-epoch, which is
+        # never a real "this column is a date" signal (see
+        # quality/data_quality_gate.py's _is_degenerate_epoch_parse for the
+        # same guard applied later in the pipeline).
         best_col = None
         best_valid = 0
         for c in df.columns:
-            if df[c].dtype == "object":
+            if pd.api.types.is_numeric_dtype(df[c]):
+                continue
+            if pd.api.types.is_string_dtype(df[c]) or df[c].dtype == "object":
                 parsed = pd.to_datetime(df[c], errors="coerce")
                 valid = parsed.notna().sum()
                 if valid > best_valid and valid >= int(0.6 * len(df)):
