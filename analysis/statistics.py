@@ -15,6 +15,25 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def safe_pct_change(delta: float, baseline: float) -> float | None:
+    """Percent change from `baseline`, given `delta` (current - baseline).
+
+    Returns None when baseline is zero but delta isn't: "+0.0%" would
+    misleadingly claim no change when the metric actually went from
+    nothing to something (or vice versa) — there is no baseline to
+    express a percentage against, and the honest answer is "not
+    applicable", not a fabricated zero. Returns 0.0 only when both
+    periods are truly zero (a genuine, real no-change case)."""
+    if baseline != 0:
+        return delta / baseline * 100
+    return None if delta != 0 else 0.0
+
+
+def format_pct_change(pct: float | None) -> str:
+    """Human-readable percent-change string, honest about a missing baseline."""
+    return "n/a (new baseline)" if pct is None else f"{pct:+.1f}%"
+
+
 class StatisticsAnalyzer(AnalysisContract):
     """
     Contract-compliant wrapper around the free functions below.
@@ -131,14 +150,20 @@ def period_comparison(
     prior = df[(df[date_col] >= prior_start) & (df[date_col] < current_start)][value_col].sum()
 
     delta = current - prior
-    pct = (delta / prior * 100) if prior != 0 else 0
+    pct = safe_pct_change(delta, prior)
 
     return {
         "comparison": comparison,
         "current": round(current, 2),
         "prior": round(prior, 2),
         "delta": round(delta, 2),
-        "pct_change": round(pct, 2),
+        # Numeric field stays a float for backward compatibility with any
+        # existing consumer doing arithmetic on it — 0.0 when there's no
+        # baseline to compare against, same as before. New consumers that
+        # need to *display* the change honestly (not claim a fabricated
+        # "+0.0%" for a from-nothing change) should use pct_change_display.
+        "pct_change": round(pct, 2) if pct is not None else 0.0,
+        "pct_change_display": format_pct_change(pct),
     }
 
 

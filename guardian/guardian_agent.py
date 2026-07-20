@@ -67,6 +67,14 @@ class GuardianVerdict:
     contradictions: list[dict] = field(default_factory=list)
     recommended_plan_override: list[str] | None = None
     prompt_rewrites: dict[str, str] = field(default_factory=dict)
+    # Run-level trust verdict: "success" | "degraded" | "failed". Distinct
+    # from `approved` (which only reflects policy vetoes) — this is what
+    # answers "was the underlying analysis actually trustworthy", so a
+    # broken run (agent errors, an inconsistent headline number, a
+    # collapsed trend, a jury that agreed but had no real confidence) can
+    # never look identical to a clean one just because nothing raised.
+    run_verdict: str = "success"
+    downgrade_reasons: list[str] = field(default_factory=list)
 
 
 class GuardianAgent(BaseAgent):
@@ -154,6 +162,13 @@ class GuardianAgent(BaseAgent):
         holdout_warnings = self._enforce_holdout(context)
         verdict.warnings.extend(holdout_warnings)
 
+        # Power 6: Run-level trust verdict — do not let a broken run look
+        # identical to a clean one just because nothing raised an exception.
+        verdict.run_verdict, verdict.downgrade_reasons = self._assess_run_health(context)
+        if verdict.run_verdict == "failed":
+            verdict.approved = False
+        verdict.warnings.extend(verdict.downgrade_reasons)
+
         reliability = []
         for name in context.active_agents:
             rel = self._scoreboard.summary(name).score
@@ -169,11 +184,13 @@ class GuardianAgent(BaseAgent):
         )
         lesson = self._lesson_extractor.extract(context)
         summary = (
-            f"Guardian review: approved={verdict.approved}, "
+            f"Guardian review: run_verdict={verdict.run_verdict}, approved={verdict.approved}, "
             f"blocked={len(verdict.blocked_findings)}, "
             f"contradictions={len(verdict.contradictions)}, "
             f"warnings={len(verdict.warnings)}, evidence_grade={evidence_grade.grade}."
         )
+        if verdict.downgrade_reasons:
+            summary += " Downgrade reasons: " + " | ".join(verdict.downgrade_reasons)
 
         return AgentResult(
             agent=self.name,
@@ -182,6 +199,8 @@ class GuardianAgent(BaseAgent):
             data={
                 "verdict": verdict,
                 "approved": verdict.approved,
+                "run_verdict": verdict.run_verdict,
+                "downgrade_reasons": verdict.downgrade_reasons,
                 "blocked_findings": verdict.blocked_findings,
                 "warnings": verdict.warnings,
                 "contradictions": verdict.contradictions,
@@ -190,6 +209,66 @@ class GuardianAgent(BaseAgent):
                 "lesson": lesson,
             },
         )
+
+    # ------------------------------------------------------------------
+    # Power 6: Run-level trust verdict
+    # ------------------------------------------------------------------
+
+    LOW_JURY_CONFIDENCE_THRESHOLD = 0.2
+
+    def _assess_run_health(self, context: AnalysisContext) -> tuple[str, list[str]]:
+        """Downgrades success -> degraded/failed when the underlying run
+        can't actually be trusted, even though nothing raised an exception:
+          - any agent errored                                 -> failed
+          - KPI delta / pct-change inconsistent                -> degraded
+          - the time series collapsed to <2 points              -> degraded
+          - a jury reached consensus with very low confidence   -> degraded
+        Returns (run_verdict, reasons) — reasons is empty iff run_verdict
+        is "success".
+        """
+        reasons: list[str] = []
+
+        errored = sorted(name for name, r in context.results.items() if r.status == "error")
+        if errored:
+            reasons.append(f"{len(errored)} agent(s) errored: {', '.join(errored)}.")
+
+        rc = context.results.get("root_cause")
+        if rc and rc.status == "success":
+            delta = rc.data.get("delta", 0.0) or 0.0
+            pct_raw = rc.data.get("pct_change_raw", rc.data.get("pct_change"))
+            if pct_raw is None and delta != 0:
+                reasons.append(
+                    f"root_cause reported delta={delta:+.0f} with no baseline to compute a "
+                    "percent change from (new-baseline case) — treat with caution."
+                )
+            elif pct_raw is not None and delta == 0 and abs(pct_raw) > 0.5:
+                reasons.append(
+                    f"root_cause reported pct_change={pct_raw:+.1f}% with delta=0 — inconsistent."
+                )
+
+        if context.date_col:
+            ts = getattr(context, "ts", None)
+            if ts is not None and len(ts) < 2:
+                reasons.append(
+                    f"time series collapsed to {len(ts)} point(s) — trend/forecast conclusions "
+                    "are not meaningful."
+                )
+
+        low_confidence = []
+        for name in ("anomaly", "forecast"):
+            r = context.results.get(name)
+            if r and r.status == "success":
+                conf = r.data.get("confidence")
+                if conf is not None and conf < self.LOW_JURY_CONFIDENCE_THRESHOLD:
+                    low_confidence.append(f"{name}={conf:.2f}")
+        if low_confidence:
+            reasons.append(f"low jury confidence: {', '.join(low_confidence)}.")
+
+        if errored:
+            return "failed", reasons
+        if reasons:
+            return "degraded", reasons
+        return "success", reasons
 
     # ------------------------------------------------------------------
     # Power 1: Score agents

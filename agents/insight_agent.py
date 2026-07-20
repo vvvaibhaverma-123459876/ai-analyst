@@ -19,7 +19,9 @@ Structure:
 ## What happened
 ## Why it happened
 ## Key findings (include experiment / forecast / segment data if present)
-## Confidence assessment (cite any debate challenges)
+## Confidence assessment (cite any debate challenges; if a "trust_review" fact
+   is present, you MUST lead this section with its run_verdict and
+   downgrade_reasons verbatim — never omit or soften a non-"success" verdict)
 ## Recommended actions
 Keep each section to 3-5 bullet points. Use specific numbers."""
 
@@ -141,6 +143,12 @@ class InsightAgent(BaseAgent):
         debate = context.results.get("debate")
         if debate and debate.status == "success":
             facts["debate"] = debate.data
+        guardian = context.results.get("guardian")
+        if guardian and guardian.status == "success" and guardian.data.get("run_verdict") != "success":
+            facts["trust_review"] = {
+                "run_verdict": guardian.data.get("run_verdict"),
+                "downgrade_reasons": guardian.data.get("downgrade_reasons"),
+            }
 
         prompt = json.dumps(facts, ensure_ascii=False, indent=2)
         return llm.complete(_BRIEF_SYSTEM, prompt)
@@ -156,6 +164,13 @@ class InsightAgent(BaseAgent):
         else:
             lines.append("- Root-cause evidence is still incomplete.")
         lines.append("\n## Confidence assessment")
+        guardian = context.results.get('guardian')
+        if guardian and guardian.status == 'success':
+            run_verdict = guardian.data.get('run_verdict', 'success')
+            if run_verdict != 'success':
+                lines.append(f"- ⚠ Trust review: **{run_verdict}** — this run has known reliability issues:")
+                for reason in guardian.data.get('downgrade_reasons') or []:
+                    lines.append(f"  - {reason}")
         debate = context.results.get('debate')
         if debate and debate.status == 'success':
             lines.append(f"- Debate verdict: {debate.data.get('verdict', 'medium')}")

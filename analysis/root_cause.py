@@ -9,6 +9,7 @@ v10: implements AnalysisContract — analyze() is the canonical entry point.
 import pandas as pd
 import numpy as np
 from analysis.contract import AnalysisContract, AnalysisResult
+from analysis.statistics import safe_pct_change, format_pct_change
 from core.config import config
 from core.logger import get_logger
 
@@ -46,13 +47,18 @@ class RootCauseAnalyzer(AnalysisContract):
             drivers  = result.get("drivers", pd.DataFrame())
             movers   = result.get("movers") or self.top_movers(drivers, n=5)
             delta    = result.get("delta", 0.0)
-            pct      = result.get("pct_change", 0.0)
+            pct_raw  = result.get("pct_change_raw")
             direction = "up" if delta >= 0 else "down"
             neg_drivers = movers.get("negative", [])
             top_neg = neg_drivers[0] if neg_drivers else {}
 
+            # direction already carries the sign ("up"/"down") — show
+            # magnitude only, except when there's no baseline to compute a
+            # percentage from at all (a from-zero change), where "+0.0%"
+            # would falsely claim nothing changed.
+            change_str = "n/a (new baseline)" if pct_raw is None else f"{abs(pct_raw):.1f}%"
             summary = (
-                f"{kpi_col} {direction} {abs(pct):.1f}% "
+                f"{kpi_col} {direction} {change_str} "
                 f"(delta={delta:+.0f})."
             )
             if top_neg:
@@ -73,7 +79,9 @@ class RootCauseAnalyzer(AnalysisContract):
                     "drivers":    drivers,
                     "movers":     movers,
                     "delta":      delta,
-                    "pct_change": pct,
+                    "pct_change": result.get("pct_change", 0.0),
+                    "pct_change_raw": pct_raw,
+                    "pct_change_display": change_str,
                     "last_total": result.get("last_total", 0.0),
                     "prev_total": result.get("prev_total", 0.0),
                     "period_last": result.get("period_last"),
@@ -136,7 +144,7 @@ class RootCauseAnalyzer(AnalysisContract):
         last_total = float(last[kpi_col].sum())
         prev_total = float(prev[kpi_col].sum())
         delta = float(last_total - prev_total)
-        pct = float(delta / prev_total * 100) if prev_total != 0 else 0.0
+        pct = safe_pct_change(delta, prev_total)
 
         exclude = {date_col, kpi_col, "__date__"}
         cat_cols = [
@@ -163,11 +171,17 @@ class RootCauseAnalyzer(AnalysisContract):
         drivers = pd.concat(results, ignore_index=True).sort_values("delta") if results else empty["drivers"].copy()
         movers = self.top_movers(drivers, n=5)
 
-        logger.info("Driver attribution: delta=%+.2f (%+.1f%%), %d driver rows", delta, pct, len(drivers))
+        logger.info("Driver attribution: delta=%+.2f (%s), %d driver rows", delta, format_pct_change(pct), len(drivers))
 
         return {
             "delta": delta,
-            "pct_change": pct,
+            # Backward-compat numeric field (0.0 fallback, as before) for
+            # any existing consumer doing arithmetic on it.
+            "pct_change": pct if pct is not None else 0.0,
+            # None-aware raw value + honest display string for correct
+            # "n/a (new baseline)" handling — see analyze()'s summary.
+            "pct_change_raw": pct,
+            "pct_change_display": format_pct_change(pct),
             "last_total": last_total,
             "prev_total": prev_total,
             "drivers": drivers,

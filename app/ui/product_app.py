@@ -648,7 +648,20 @@ def render_results(context: AnalysisContext) -> None:
     c2.metric("Rows analyzed", f"{len(context.df):,}")
     c3.metric("Agents active", len(context.active_agents))
     c4.metric("Anomalies", anomaly.data.get("anomaly_count", 0) if anomaly and anomaly.status == "success" else "—")
-    c5.metric("Trust review", guardian.status if guardian else "pending")
+    # guardian.status is just "did the guardian agent itself crash" — always
+    # "success" unless the reviewer program broke. The actual trust verdict
+    # about whether the underlying run can be believed lives in
+    # guardian.data["run_verdict"] (success/degraded/failed — see
+    # GuardianAgent._assess_run_health), which is what a "Trust review" tile
+    # should show; otherwise a run with 3 errored agents and a
+    # self-contradictory headline number reads as "Trust review: success".
+    if guardian and guardian.status == "success":
+        run_verdict = guardian.data.get("run_verdict", "success")
+        reasons = guardian.data.get("downgrade_reasons") or []
+        trust_help = " | ".join(reasons) if reasons else None
+        c5.metric("Trust review", run_verdict, help=trust_help)
+    else:
+        c5.metric("Trust review", "pending")
 
     overview, deep_dive, agents_tab, chat_tab, export_tab = st.tabs(["Executive brief", "Deep dive", "Agent console", "Ask follow-up", "Export"])
 
