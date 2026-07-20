@@ -33,6 +33,7 @@ import streamlit as st
 from agents.context import AnalysisContext
 from agents.runner import AgentRunner, AGENT_REGISTRY
 from charts.chart_builder import trend_with_anomalies, driver_bar_chart, funnel_chart, cohort_heatmap, kpi_comparison_bar
+from core.config import config
 from ingestion.ingestion_engine import IngestionEngine
 from output.conversation_engine import ConversationEngine
 from security.security_shell import SecurityShell
@@ -420,8 +421,17 @@ def render_agent_grid(started: list[str], results: dict[str, Any]) -> str:
 
 
 def render_hero() -> None:
+    if config.ANALYST_MODE == "full":
+        mode_chip = '<span class="pill" style="background:#052e1a;color:#4ade80;border-color:#166534;">● Full mode — live LLM calls enabled</span>'
+    else:
+        mode_chip = (
+            '<span class="pill" style="background:#1e1b4b;color:#c4b5fd;border-color:#4c1d95;" '
+            'title="No API keys, no outbound network calls. Rule-based/deterministic analysis only. '
+            'Set ANALYST_MODE=full and configure an LLM key to unlock live generation.">'
+            "◇ Offline demo mode — no LLM calls, no API keys required</span>"
+        )
     st.markdown(
-        """
+        f"""
         <div class="hero">
             <div class="hero-kicker">AI Analyst Command Center · production UI</div>
             <h1>One app for governed, explainable business analysis.</h1>
@@ -431,6 +441,7 @@ def render_hero() -> None:
                 users to the system's internal complexity.
             </p>
             <div class="pill-row">
+                {mode_chip}
                 <span class="pill">Semantic Layer</span>
                 <span class="pill">Security Shell</span>
                 <span class="pill">Anomaly Jury</span>
