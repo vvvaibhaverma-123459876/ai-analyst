@@ -2,7 +2,8 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    ANALYST_MODE=offline
 
 WORKDIR /app
 
@@ -11,12 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements-ci.txt requirements-ci.txt
+# requirements-demo.txt is the slim, product-UI-only install (used for the
+# hosted offline demo); requirements.txt (everything, incl. prophet/chromadb/
+# sentence-transformers/snowflake/bigquery) stays available for a self-hosted
+# full-mode container.
+COPY requirements-demo.txt requirements-demo.txt
 COPY requirements.txt requirements.txt
-RUN pip install --upgrade pip && pip install -r requirements-ci.txt && pip install streamlit plotly python-multipart uvicorn
+RUN pip install --upgrade pip && pip install -r requirements-demo.txt python-multipart uvicorn
 
 COPY . .
 
 EXPOSE 8501 8000
 
-CMD ["streamlit", "run", "app/ui/product_app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+# Render/Railway/most container hosts inject $PORT; Streamlit Cloud manages
+# its own port and ignores this Dockerfile entirely (see docs/deployment.md).
+CMD ["sh", "-c", "streamlit run app/ui/product_app.py --server.address 0.0.0.0 --server.port ${PORT:-8501}"]
