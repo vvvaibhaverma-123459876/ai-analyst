@@ -23,10 +23,24 @@ def _load_yaml(filename: str) -> dict:
 
 
 class Config:
+    # Single, explicit switch for the whole app: "offline" (default) | "full".
+    # Offline is the only mode the public demo deploy should ever run in.
+    #
+    # Every LLM-touching module in this codebase already guards on
+    # `config.OPENAI_API_KEY or config.ANTHROPIC_API_KEY` being falsy and
+    # degrades to a deterministic/rule-based path when it is (see e.g.
+    # output/conversation_engine.py, agents/insight_agent.py,
+    # context_engine/context_engine.py). Blanking both keys here — regardless
+    # of what's actually set in the environment — makes that fallback
+    # unconditional in offline mode: a stray platform secret (e.g. an
+    # OPENAI_API_KEY left over in Streamlit Cloud secrets) can no longer
+    # cause a paid call. Set ANALYST_MODE=full to opt back in.
+    ANALYST_MODE: str = os.getenv("ANALYST_MODE", "offline").strip().lower()
+
     # LLM provider — switchable later: "openai" | "anthropic" | "gemini"
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "") if ANALYST_MODE == "full" else ""
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "") if ANALYST_MODE == "full" else ""
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
 
