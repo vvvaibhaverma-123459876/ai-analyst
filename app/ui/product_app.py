@@ -274,25 +274,45 @@ def read_uploaded_file(uploaded) -> tuple[pd.DataFrame, Any, list[str]]:
     return df, doc, doc.warnings
 
 
+def _looks_like_date_column(series: pd.Series, sample_size: int = 200) -> bool:
+    """A column is only a valid date candidate if it's already a datetime
+    dtype, or a non-numeric column where parsing a sample as dates succeeds
+    at a high rate. Numeric (int/float) columns are NEVER date candidates:
+    pd.to_datetime silently reinterprets raw numbers as nanoseconds-since-
+    epoch, so a binary flag or count column can look "successfully parsed"
+    as a handful of dates within seconds of 1970-01-01 — never a real date
+    column pick. The >=95% threshold (up from a looser 65%) also guards
+    against a mostly-garbage column parsing at just-barely-plausible rates."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    if pd.api.types.is_numeric_dtype(series):
+        return False
+    sample = series.dropna().head(sample_size)
+    if sample.empty:
+        return False
+    parsed = pd.to_datetime(sample, errors="coerce")
+    return parsed.notna().mean() >= 0.95
+
+
 def guess_columns(df: pd.DataFrame) -> ColumnGuess:
     if df is None or df.empty:
         return ColumnGuess(None, None, [], None, None)
 
     cols = list(df.columns)
     lower = {c: c.lower().strip() for c in cols}
+    date_name_hint = ["date", "time", "created", "signup", "event"]
 
-    date_scores: list[tuple[int, str]] = []
-    for c in cols:
-        score = 0
-        name = lower[c]
-        if any(k in name for k in ["date", "time", "created", "signup", "event"]):
-            score += 3
-        sample = pd.to_datetime(df[c].dropna().head(30), errors="coerce")
-        if len(sample) and sample.notna().mean() >= 0.65:
-            score += 3
-        if score:
-            date_scores.append((score, c))
-    date_col = sorted(date_scores, reverse=True)[0][1] if date_scores else None
+    # Type validity is mandatory and filters the candidate pool FIRST; name
+    # heuristics only break ties among columns that are actually
+    # date-parseable, never substitute for type validity.
+    date_candidates = [c for c in cols if _looks_like_date_column(df[c])]
+    date_col = None
+    if date_candidates:
+        date_col = sorted(
+            date_candidates,
+            key=lambda c: (any(k in lower[c] for k in date_name_hint), df[c].nunique(dropna=True)),
+            reverse=True,
+        )[0]
 
     numeric_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
     kpi_preference = ["revenue", "conversion", "success", "active", "orders", "signups", "users", "amount", "value", "kpi", "metric"]
@@ -309,28 +329,73 @@ def guess_columns(df: pd.DataFrame) -> ColumnGuess:
         scored = sorted(scored, key=lambda x: (x[0], x[1]), reverse=True)
         kpi_col = scored[0][2]
 
-    dims = []
-    for c in cols:
-        if c in {date_col, kpi_col}:
-            continue
-        nunique = df[c].nunique(dropna=True)
-        if df[c].dtype == "object" or nunique <= 25:
-            if 1 < nunique <= max(25, len(df) // 2):
-                dims.append(c)
-
     user_col = None
     for c in cols:
         if any(k in lower[c] for k in ["user_id", "userid", "customer_id", "member_id", "account_id", "user", "customer"]):
             user_col = c
             break
 
-    stage_col = None
+    # Funnel stage must be a low-cardinality categorical column — never a
+    # timestamp (a name match alone isn't enough: "event_time" contains
+    # "event" but is a date, not a stage) and never numeric. A name-keyword
+    # match is required, not just "first categorical column left over", so
+    # datasets with no real funnel concept (e.g. the growth KPI demo, whose
+    # channel/region/device columns are all low-cardinality) correctly get
+    # stage_col=None instead of an arbitrary dimension mislabeled as a stage.
+    stage_name_hint = ["stage", "step", "funnel", "status", "event"]
+    stage_candidates = []
     for c in cols:
-        if any(k in lower[c] for k in ["stage", "step", "event", "funnel", "status"]):
-            stage_col = c
-            break
+        if c in {date_col, kpi_col, user_col} or c in date_candidates or pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        nunique = df[c].nunique(dropna=True)
+        if 1 < nunique <= 20 and any(k in lower[c] for k in stage_name_hint):
+            stage_candidates.append(c)
+    stage_col = sorted(stage_candidates, key=lambda c: df[c].nunique(dropna=True))[0] if stage_candidates else None
+
+    dims = []
+    for c in cols:
+        if c in {date_col, kpi_col, user_col, stage_col}:
+            continue
+        nunique = df[c].nunique(dropna=True)
+        if df[c].dtype == "object" or nunique <= 25:
+            if 1 < nunique <= max(25, len(df) // 2):
+                dims.append(c)
 
     return ColumnGuess(date_col, kpi_col, dims[:8], user_col, stage_col)
+
+
+# Deterministic, known-correct column mappings for the bundled demo
+# datasets — the demo path should never depend on heuristic inference
+# guessing right; heuristics are the fallback for arbitrary user uploads.
+DATASET_DEFAULT_COLUMNS: dict[str, ColumnGuess] = {
+    "sample_fintech_onboarding.csv": ColumnGuess(
+        date_col="event_time",
+        kpi_col="payment_success_event",
+        dimensions=["channel", "platform", "city", "app_version"],
+        user_col="user_id",
+        stage_col="stage",
+    ),
+    "sample_growth_data.csv": ColumnGuess(
+        date_col="date",
+        kpi_col="revenue",
+        dimensions=["channel", "region", "device"],
+        user_col=None,
+        stage_col=None,
+    ),
+}
+
+
+def resolve_columns(df: pd.DataFrame, filename: str = "") -> ColumnGuess:
+    """The known-good mapping for a bundled demo dataset if filename matches
+    one (and every mapped column still actually exists in df — a safety net
+    against the bundled CSV changing shape later without this map being
+    updated); heuristic guess_columns() otherwise."""
+    default = DATASET_DEFAULT_COLUMNS.get(filename)
+    if default is not None:
+        mapped = [c for c in (default.date_col, default.kpi_col, default.user_col, default.stage_col) if c]
+        if all(c in df.columns for c in mapped) and all(c in df.columns for c in default.dimensions):
+            return default
+    return guess_columns(df)
 
 
 def build_report(context: AnalysisContext) -> str:
@@ -543,10 +608,10 @@ def render_data_connector() -> tuple[pd.DataFrame, str, Any, list[str]]:
     return df, filename, doc, warnings
 
 
-def render_schema_controls(df: pd.DataFrame) -> tuple[str | None, str | None, str]:
+def render_schema_controls(df: pd.DataFrame, filename: str = "") -> tuple[str | None, str | None, str]:
     if df.empty:
         return None, None, "Daily"
-    guess = guess_columns(df)
+    guess = resolve_columns(df, filename)
     st.markdown("<div class='surface'><h3>Validate analysis setup</h3><p class='soft'>The app makes smart guesses, but the user stays in control before agents run.</p></div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1.1, 1.1, .8])
     with c1:
@@ -728,7 +793,7 @@ def main() -> None:
     render_hero()
 
     df, filename, doc, warnings = render_data_connector()
-    date_col, kpi_col, grain = render_schema_controls(df)
+    date_col, kpi_col, grain = render_schema_controls(df, filename)
 
     if df.empty:
         render_capability_map()
