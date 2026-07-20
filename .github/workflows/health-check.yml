@@ -1,0 +1,55 @@
+name: Daily deploy health check
+
+on:
+  schedule:
+    - cron: "23 9 * * *" # once a day
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl the live app's health endpoint
+        id: probe
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: |
+          set -eu
+          if [ -z "${DEPLOY_URL:-}" ]; then
+            echo "::warning::DEPLOY_URL repo variable is not set — skipping health check."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Streamlit's built-in health endpoint.
+          code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "${DEPLOY_URL%/}/_stcore/health" || echo "000")
+          echo "http_code=${code}" >> "$GITHUB_OUTPUT"
+          echo "HTTP ${code}"
+
+      - name: Open or update an issue on failure
+        if: steps.probe.outputs.skip != 'true' && steps.probe.outputs.http_code != '200'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          existing=$(gh issue list --search "in:title \"Live demo is down\"" --state open --json number --jq '.[0].number // empty')
+          body="Health check against \${DEPLOY_URL}/_stcore/health returned HTTP ${{ steps.probe.outputs.http_code }} at $(date -u +%FT%TZ)."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "🔴 Live demo is down" --body "$body" --label "deploy-health"
+          fi
+
+      - name: Close the tracking issue if healthy again
+        if: steps.probe.outputs.skip != 'true' && steps.probe.outputs.http_code == '200'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          existing=$(gh issue list --search "in:title \"Live demo is down\"" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Health check passed again (HTTP 200) at $(date -u +%FT%TZ). Closing."
+            gh issue close "$existing"
+          fi

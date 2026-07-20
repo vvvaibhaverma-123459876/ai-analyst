@@ -15,6 +15,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
 
       - name: Install dependencies
         run: |
@@ -29,3 +31,40 @@ jobs:
           AI_ANALYST_FULL_JURY: '0'
           AI_ANALYST_ENABLE_WEB_ENRICHMENT: '0'
         run: pytest -q
+
+  demo-smoke:
+    name: Demo deploy smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-demo.txt
+
+      - name: Install slim demo dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-demo.txt
+
+      - name: Headless import of the product UI (catches missing-dep breakage)
+        env:
+          ANALYST_MODE: offline
+        run: |
+          python -c "
+          import app.ui.product_app as m
+          assert m.config.ANALYST_MODE == 'offline', m.config.ANALYST_MODE
+          assert m.config.OPENAI_API_KEY == '', 'offline mode must not carry a live key'
+          df = m.load_sample('Fintech onboarding demo')
+          assert not df.empty, 'fintech demo dataset failed to preload'
+          print(f'OK: product_app imports cleanly, demo dataset preloads {df.shape[0]} rows')
+          "
+
+      - name: Offline-mode pipeline + zero-network-call test
+        env:
+          ANALYST_MODE: offline
+        run: pytest tests/test_offline_mode.py -v
